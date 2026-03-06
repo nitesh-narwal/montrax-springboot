@@ -1,0 +1,94 @@
+services:
+  moneymanager-backend:
+    image: montrax:v3
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: moneymanager-backend
+    restart: unless-stopped
+
+    # Resource limits - Spring Boot + Hibernate needs ~700-750MB total
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+          cpus: '0.75'
+        reservations:
+          memory: 640M
+          cpus: '0.25'
+
+    # Use standard port mapping
+    ports:
+      - "8090:8090"
+
+    # DNS settings for external services
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+
+    # Environment variables
+    environment:
+      # JVM Memory Settings - Spring Boot + Hibernate + MongoDB needs adequate memory
+      # Heap: 384MB, Metaspace: 256MB, plus native memory ~100MB
+      JAVA_OPTS: "-Xmx384m -Xms256m -XX:MaxMetaspaceSize=256m -XX:+UseSerialGC -XX:+ExitOnOutOfMemoryError -Djava.security.egd=file:/dev/./urandom"
+
+      # Database Configuration (External - Neon PostgreSQL)
+      DB_URI: ${DB_URI}
+      DB_USERNAME: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+
+      # JWT Configuration
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+
+      # Mail Configuration (Mailjet)
+      MAILJET_API_KEY: ${MAILJET_API_KEY}
+      MAILJET_SECRET_KEY: ${MAILJET_SECRET_KEY}
+      MAILJET_MAIL_FROM: ${MAILJET_MAIL_FROM}
+
+      # Razorpay Configuration
+      RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID}
+      RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET}
+      RAZORPAY_WEBHOOK_SECRET: ${RAZORPAY_WEBHOOK_SECRET}
+
+      # Google Gemini AI
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+
+      # MongoDB (External)
+      MONGODB_URI: ${MONGODB_URI:-}
+
+      # Redis (External or disabled)
+      REDIS_HOST: ${REDIS_HOST:-localhost}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      CACHE_TYPE: ${CACHE_TYPE:-simple}
+
+      # Cloudinary Configuration
+      CLOUDINARY_CLOUD_NAME: ${CLOUDINARY_CLOUD_NAME}
+      CLOUDINARY_API_KEY: ${CLOUDINARY_API_KEY}
+      CLOUDINARY_API_SECRET: ${CLOUDINARY_API_SECRET}
+
+      # Frontend URL (update for production)
+      MONEY_MANAGER_FRONTEND_URL: ${MONEY_MANAGER_FRONTEND_URL:-http://localhost:5173}
+
+      # Activation URL
+      APP_ACTIVATION_URL: ${APP_ACTIVATION_URL:-http://localhost:8090}
+
+    # Environment file for secrets
+    env_file:
+      - .env
+
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # Health check - use simple check that doesn't depend on actuator health status
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8090/api/subscription/plans"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s

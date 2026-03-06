@@ -37,10 +37,30 @@ public class ProfileEntity {
     private Boolean isActive;
     private String activationToken;
 
+    // Account deletion fields for 3-day grace period
+    @Column(name = "deletion_requested_at")
+    private LocalDateTime deletionRequestedAt;
+
+    @Column(name = "deletion_scheduled_at")
+    private LocalDateTime deletionScheduledAt;
+
+    @Column(name = "is_pending_deletion")
+    private Boolean isPendingDeletion;
+
+    // Password reset fields
+    @Column(name = "password_reset_token")
+    private String passwordResetToken;
+
+    @Column(name = "password_reset_token_expiry")
+    private LocalDateTime passwordResetTokenExpiry;
+
     @PrePersist
     public void prePrePersist() {
         if (this.isActive == null) {
             isActive = false;
+        }
+        if (this.isPendingDeletion == null) {
+            isPendingDeletion = false;
         }
     }
 

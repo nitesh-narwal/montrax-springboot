@@ -1,0 +1,48 @@
+# Git
+.git
+.gitignore
+
+# IDE
+.idea
+*.iml
+.vscode
+*.swp
+*.swo
+
+# Build directories
+target/
+!target/*.jar
+
+# Maven
+.mvn/repository
+
+# Logs
+*.log
+logs/
+
+# Environment files (secrets)
+.env
+.env.local
+.env.*.local
+
+# Docker
+Dockerfile*
+docker-compose*
+.docker
+
+# Documentation
+*.md
+!README.md
+
+# Tests
+src/test/
+
+# Temporary files
+*.tmp
+*.temp
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
