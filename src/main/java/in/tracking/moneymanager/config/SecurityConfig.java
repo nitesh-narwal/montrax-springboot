@@ -39,7 +39,7 @@ public class SecurityConfig {
                 .csrf(AbstractHttpConfigurer::disable)
                 .authorizeHttpRequests(authorize -> authorize
                         // Public endpoints - no authentication required
-                        .requestMatchers("/register", "/activate/**", "/status", "/health", "/login").permitAll()
+                        .requestMatchers("/register", "/activate/**", "/resend-activation", "/status", "/health", "/login").permitAll()
                         // Actuator endpoints for health checks
                         .requestMatchers("/actuator/**").permitAll()
                         // Password reset endpoints - public

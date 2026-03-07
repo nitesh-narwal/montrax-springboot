@@ -38,6 +38,23 @@ public class ProfileController {
         }
     }
 
+    /**
+     * Resend activation email for users who didn't receive the first one.
+     * POST /resend-activation
+     */
+    @PostMapping("/resend-activation")
+    public ResponseEntity<Map<String, Object>> resendActivationEmail(@RequestBody Map<String, String> request) {
+        String email = request.get("email");
+        if (email == null || email.trim().isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of(
+                "success", false,
+                "message", "Email is required"
+            ));
+        }
+        Map<String, Object> result = profileService.resendActivationEmail(email.trim());
+        return ResponseEntity.ok(result);
+    }
+
     @PostMapping("/login")
     public ResponseEntity<Map<String, Object>> login(@RequestBody AuthDTO authDTO) {
         try {

@@ -33,11 +33,8 @@ public class ProfileService {
     private final AuthenticationManager authenticationManager;
     private final JwtUtil jwtUtil;
 
-    @Value( "${app.activation.url}")
-    private String activationURL;
-
-    @Value("${app.password-reset.url:${app.activation.url}}")
-    private String passwordResetURL;
+    @Value("${money.manager.frontend.url}")
+    private String frontendURL;
 
     // Grace period in days before permanent deletion
     private static final int DELETION_GRACE_PERIOD_DAYS = 3;
@@ -45,16 +42,33 @@ public class ProfileService {
     // Password reset token expiry in hours
     private static final int PASSWORD_RESET_TOKEN_EXPIRY_HOURS = 1;
 
+    @Transactional
     public ProfileDTO registerProfile(ProfileDTO profileDTO) {
+        // Check if email already exists
+        if (profileRepository.findByEmail(profileDTO.getEmail()).isPresent()) {
+            throw new RuntimeException("Email already registered: " + profileDTO.getEmail());
+        }
+
         ProfileEntity newProfile = toEntity(profileDTO);
         newProfile.setActivationToken(UUID.randomUUID().toString());
+        newProfile.setIsActive(false);
         newProfile = profileRepository.save(newProfile);
+        profileRepository.flush(); // Force commit the profile save immediately
 
-        //send activation email
-        String activationLink = activationURL + "/activate?token=" + newProfile.getActivationToken();
-        String subject = "Activate your Money Manager account";
-        String body = "Please click on the following link to activate your account: " + activationLink;
-        emailService.sendEmail(newProfile.getEmail(), subject, body);
+        log.info("Profile registered with ID: {} and email: {}", newProfile.getId(), newProfile.getEmail());
+
+        // Send activation email (failure should not roll back profile save)
+        try {
+            String activationLink = frontendURL + "/activate/" + newProfile.getActivationToken();
+            String subject = "Activate your Money Manager account";
+            String body = "Please click on the following link to activate your account: " + activationLink;
+            emailService.sendEmail(newProfile.getEmail(), subject, body);
+            log.info("Activation email sent to: {}", newProfile.getEmail());
+        } catch (Exception e) {
+            log.error("Failed to send activation email to: {}. Error: {}", newProfile.getEmail(), e.getMessage());
+            // Don't throw - profile is already saved, user can request resend
+        }
+
         return toDTO(newProfile);
     }
 
@@ -81,21 +95,81 @@ public class ProfileService {
                 .build();
     }
 
+    @Transactional
     public boolean activateProfile(String activationToken) {
+        log.info("Attempting to activate profile with token: {}", activationToken);
         return profileRepository.findByActivationToken(activationToken)
                 .map(profile -> {
-                    ;
+                    log.info("Found profile with email: {} for activation", profile.getEmail());
                     profile.setIsActive(true);
+                    profile.setActivationToken(null); // Clear token after use to prevent reuse
                     profileRepository.save(profile);
+                    log.info("Profile {} activated successfully", profile.getEmail());
                     return true;
                 })
-                .orElse(false);
+                .orElseGet(() -> {
+                    log.warn("No profile found with activation token: {}", activationToken);
+                    return false;
+                });
     }
 
     public boolean isAccountActive(String email) {
         return profileRepository.findByEmail(email)
                 .map(ProfileEntity::getIsActive)
                 .orElse(false);
+    }
+
+    /**
+     * Resend activation email for users who didn't receive the first one.
+     *
+     * @param email User's email address
+     * @return Map with status and message
+     */
+    @Transactional
+    public Map<String, Object> resendActivationEmail(String email) {
+        log.info("Resend activation requested for email: {}", email);
+
+        ProfileEntity profile = profileRepository.findByEmail(email).orElse(null);
+
+        if (profile == null) {
+            log.warn("Resend activation requested for non-existent email: {}", email);
+            return Map.of(
+                "success", false,
+                "message", "No account found with this email"
+            );
+        }
+
+        if (Boolean.TRUE.equals(profile.getIsActive())) {
+            return Map.of(
+                "success", false,
+                "message", "Account is already activated. Please login."
+            );
+        }
+
+        // Generate new activation token if none exists
+        if (profile.getActivationToken() == null) {
+            profile.setActivationToken(UUID.randomUUID().toString());
+            profileRepository.save(profile);
+        }
+
+        try {
+            String activationLink = frontendURL + "/activate/" + profile.getActivationToken();
+            String subject = "Activate your Money Manager account";
+            String body = "Please click on the following link to activate your account: " + activationLink;
+            emailService.sendEmail(profile.getEmail(), subject, body);
+            log.info("Activation email resent to: {}", email);
+
+            return Map.of(
+                "success", true,
+                "message", "Activation email sent. Please check your inbox and spam folder."
+            );
+        } catch (Exception e) {
+            log.error("Failed to resend activation email to: {}. Error: {}", email, e.getMessage());
+            return Map.of(
+                "success", false,
+                "message", "Failed to send email. Please try again later."
+            );
+        }
     }
 
     public ProfileEntity getCurrentProfile() {
@@ -350,6 +424,8 @@ public class ProfileService {
      */
     @Transactional
     public Map<String, Object> requestPasswordReset(String email) {
+        log.info("Password reset requested for email: {}", email);
+
         // Always return success message to prevent email enumeration attacks
         Map<String, Object> successResponse = Map.of(
             "success", true,
@@ -361,8 +437,15 @@ public class ProfileService {
 
             if (profile == null) {
                 log.warn("Password reset requested for non-existent email: {}", email);
+                // List all emails in DB for debugging (remove in production)
+                log.debug("Existing emails in database: {}",
+                    profileRepository.findAll().stream()
+                        .map(ProfileEntity::getEmail)
+                        .toList());
                 return successResponse; // Don't reveal that email doesn't exist
             }
+
+            log.info("Found profile for password reset: ID={}, email={}", profile.getId(), profile.getEmail());
 
             // Generate reset token
             String resetToken = UUID.randomUUID().toString();
@@ -373,7 +456,7 @@ public class ProfileService {
             profileRepository.save(profile);
 
             // Send password reset email
-            String resetLink = passwordResetURL + "/reset-password?token=" + resetToken;
+            String resetLink = frontendURL + "/reset-password?token=" + resetToken;
             String subject = "Reset Your Money Manager Password";
             String body = String.format(
                 "<html><body>" +
