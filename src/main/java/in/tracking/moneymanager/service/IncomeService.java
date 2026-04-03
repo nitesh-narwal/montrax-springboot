@@ -82,6 +82,14 @@ public class IncomeService {
         return total != null ? total : BigDecimal.ZERO;
     }
 
+    public List<IncomeDTO> getAllIncomeForCurrentUserOrderByDateDesc() {
+        ProfileEntity profile = profileService.getCurrentProfile();
+        return incomeRepository.findByProfileIdOrderByDateDesc(profile.getId())
+                .stream()
+                .map(this::toDTO)
+                .toList();
+    }
+
 
     /**
      * Add income for a specific profile (used by recurring transactions).

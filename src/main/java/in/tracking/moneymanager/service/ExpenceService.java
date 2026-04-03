@@ -87,6 +87,13 @@ public class ExpenceService {
         return total != null ? total : BigDecimal.ZERO;
     }
 
+    public List<ExpenceDTO> getAllExpenceForCurrentUserOrderByDateDesc() {
+        ProfileEntity profile = profileService.getCurrentProfile();
+        return expenceRepository.findByProfileIdOrderByDateDesc(profile.getId())
+                .stream()
+                .map(this::toDTO)
+                .toList();
+    }
 
     /**
      * Add expense for a specific profile (used by recurring transactions).

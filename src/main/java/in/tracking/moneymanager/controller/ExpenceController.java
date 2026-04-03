@@ -34,4 +34,10 @@ public class ExpenceController {
         expenceService.deleteExpence(id);
         return ResponseEntity.noContent().build();
     }
+
+    @GetMapping("/all")
+    public ResponseEntity<List<ExpenceDTO>> getAllExpenceDesc() {
+        return ResponseEntity.ok(expenceService.getAllExpenceForCurrentUserOrderByDateDesc());
+    }
+
 }

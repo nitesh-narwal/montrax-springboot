@@ -107,5 +107,16 @@ public class RecurringTransactionEntity {
     public void preUpdate() {
         this.updatedAt = LocalDateTime.now();
     }
+
+    // CSV of allowed weekdays for WEEKLY frequency (example: "1,3,5")
+    @Column(name = "week_days_csv", length = 20)
+    private String weekDaysCsv;
+
+    // CSV of weekdays to skip for DAILY frequency (example: "6,7")
+    @Column(name = "excluded_week_days_csv", length = 20)
+    private String excludedWeekDaysCsv;
+
+
+
 }
 

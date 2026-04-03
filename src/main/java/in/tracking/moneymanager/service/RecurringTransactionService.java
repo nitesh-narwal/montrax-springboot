@@ -16,8 +16,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
 import java.util.stream.Collectors;
 
 /**
@@ -47,6 +46,10 @@ public class RecurringTransactionService {
     // Max transactions to process per job run (to limit DB load)
     private static final int BATCH_SIZE = 100;
 
+    private static final Set<Integer> VALID_WEEK_DAYS = Set.of(1, 2, 3, 4, 5, 6, 7);
+    private static final int MAX_NEXT_EXECUTION_SCAN_DAYS = 400;
+
+
     /**
      * Get all recurring transactions for current user.
      */
@@ -71,7 +74,7 @@ public class RecurringTransactionService {
             throw new RuntimeException("Maximum recurring transactions limit reached (" +
                     MAX_RECURRING_PER_USER + ")");
         }
-
+        validateRecurringInput(dto);
         RecurringTransactionEntity entity = RecurringTransactionEntity.builder()
                 .profileId(profileId)
                 .name(dto.getName())
@@ -81,6 +84,8 @@ public class RecurringTransactionService {
                 .icon(dto.getIcon())
                 .frequency(dto.getFrequency().toUpperCase())
                 .dayOfPeriod(dto.getDayOfPeriod())
+                .weekDaysCsv(toCsv(dto.getWeekDays()))                    // map new field
+                .excludedWeekDaysCsv(toCsv(dto.getExcludedWeekDays()))    // map new field
                 .startDate(dto.getStartDate() != null ? dto.getStartDate() : LocalDate.now())
                 .endDate(dto.getEndDate())
                 .isActive(true)
@@ -111,6 +116,8 @@ public class RecurringTransactionService {
         if (!entity.getProfileId().equals(profileId)) {
             throw new RuntimeException("Access denied");
         }
+
+        validateRecurringInput(dto);
 
         entity.setName(dto.getName());
         entity.setAmount(dto.getAmount());
@@ -275,50 +282,133 @@ public class RecurringTransactionService {
     // ==================== Private Helper Methods ====================
 
     /**
-     * Calculate next execution date based on frequency.
+     * Calculate next execution date based on full scheduling rules.
+     * Supports:
+     * - WEEKLY on specific weekdays
+     * - DAILY excluding specific weekdays
+     * - Existing dayOfPeriod behavior for backward compatibility
      */
     private LocalDate calculateNextExecution(RecurringTransactionEntity entity, LocalDate lastExecuted) {
-        LocalDate baseDate = lastExecuted != null
-                ? lastExecuted
-                : entity.getStartDate().minusDays(1);  // So it executes on start date
-
-        LocalDate nextDate = switch (entity.getFrequency()) {
-            case "DAILY" -> baseDate.plusDays(1);
-            case "WEEKLY" -> {
-                LocalDate next = baseDate.plusWeeks(1);
-                if (entity.getDayOfPeriod() != null && entity.getDayOfPeriod() >= 1 && entity.getDayOfPeriod() <= 7) {
-                    // Adjust to specific day of week
-                    int targetDay = entity.getDayOfPeriod();
-                    int currentDay = next.getDayOfWeek().getValue();
-                    next = next.plusDays((targetDay - currentDay + 7) % 7);
-                }
-                yield next;
-            }
-            case "MONTHLY" -> {
-                LocalDate next = baseDate.plusMonths(1);
-                if (entity.getDayOfPeriod() != null) {
-                    int day = Math.min(entity.getDayOfPeriod(), next.lengthOfMonth());
-                    yield next.withDayOfMonth(day);
-                }
-                yield next;
-            }
-            case "YEARLY" -> baseDate.plusYears(1);
-            default -> baseDate.plusMonths(1);
-        };
-
-        // Ensure next date is in the future
         LocalDate today = LocalDate.now();
-        while (nextDate.isBefore(today) || nextDate.isEqual(today)) {
-            nextDate = switch (entity.getFrequency()) {
-                case "DAILY" -> nextDate.plusDays(1);
-                case "WEEKLY" -> nextDate.plusWeeks(1);
-                case "MONTHLY" -> nextDate.plusMonths(1);
-                case "YEARLY" -> nextDate.plusYears(1);
-                default -> nextDate.plusMonths(1);
-            };
+
+        // Start scanning from next day after last execution, or from start date for new records.
+        LocalDate scanDate = (lastExecuted != null ? lastExecuted.plusDays(1) : entity.getStartDate());
+        if (scanDate.isBefore(today)) {
+            scanDate = today;
         }
 
-        return nextDate;
+        // Bounded scan prevents accidental infinite loop on bad config.
+        for (int i = 0; i < MAX_NEXT_EXECUTION_SCAN_DAYS; i++) {
+            if (matchesSchedule(entity, scanDate)) {
+                return scanDate;
+            }
+            scanDate = scanDate.plusDays(1);
+        }
+
+        throw new IllegalStateException("Unable to compute next execution within safe scan window");
+    }
+
+    private boolean matchesSchedule(RecurringTransactionEntity entity, LocalDate date) {
+        if (date.isBefore(entity.getStartDate())) return false;
+        if (entity.getEndDate() != null && date.isAfter(entity.getEndDate())) return false;
+
+        String frequency = entity.getFrequency();
+
+        return switch (frequency) {
+            case "DAILY" -> {
+                Set<Integer> excluded = toSet(entity.getExcludedWeekDaysCsv());
+                int dow = date.getDayOfWeek().getValue();
+                yield !excluded.contains(dow);
+            }
+
+            case "WEEKLY" -> {
+                Set<Integer> allowed = toSet(entity.getWeekDaysCsv());
+
+                // Backward compatibility: old data may only have dayOfPeriod
+                if (allowed.isEmpty() && entity.getDayOfPeriod() != null) {
+                    allowed = Set.of(entity.getDayOfPeriod());
+                }
+
+                int dow = date.getDayOfWeek().getValue();
+                yield allowed.contains(dow);
+            }
+
+            case "MONTHLY" -> {
+                if (entity.getDayOfPeriod() == null) yield false;
+                int target = Math.min(entity.getDayOfPeriod(), date.lengthOfMonth());
+                yield date.getDayOfMonth() == target;
+            }
+
+            case "YEARLY" -> {
+                LocalDate start = entity.getStartDate();
+                int targetDay = Math.min(start.getDayOfMonth(), date.lengthOfMonth());
+                yield date.getMonth() == start.getMonth() && date.getDayOfMonth() == targetDay;
+            }
+
+            default -> false;
+        };
+    }
+
+    private void validateRecurringInput(RecurringTransactionDTO dto) {
+        String frequency = dto.getFrequency() == null ? "" : dto.getFrequency().toUpperCase();
+
+        validateWeekDays(dto.getWeekDays(), "weekDays");
+        validateWeekDays(dto.getExcludedWeekDays(), "excludedWeekDays");
+
+        if ("WEEKLY".equals(frequency)) {
+            boolean hasWeekDays = dto.getWeekDays() != null && !dto.getWeekDays().isEmpty();
+            boolean hasLegacyDay = dto.getDayOfPeriod() != null;
+
+            if (!hasWeekDays && !hasLegacyDay) {
+                throw new RuntimeException("For WEEKLY frequency, provide weekDays or dayOfPeriod");
+            }
+            if (hasWeekDays && hasLegacyDay) {
+                throw new RuntimeException("For WEEKLY frequency, use either weekDays or dayOfPeriod, not both");
+            }
+        }
+
+        if ("DAILY".equals(frequency) && dto.getDayOfPeriod() != null) {
+            throw new RuntimeException("dayOfPeriod is not applicable for DAILY frequency");
+        }
+
+        if ("MONTHLY".equals(frequency)) {
+            if (dto.getDayOfPeriod() == null || dto.getDayOfPeriod() < 1 || dto.getDayOfPeriod() > 31) {
+                throw new RuntimeException("For MONTHLY frequency, dayOfPeriod must be between 1 and 31");
+            }
+        }
+    }
+
+    private void validateWeekDays(List<Integer> days, String fieldName) {
+        if (days == null || days.isEmpty()) return;
+        for (Integer d : days) {
+            if (d == null || !VALID_WEEK_DAYS.contains(d)) {
+                throw new RuntimeException(fieldName + " must contain values between 1 and 7");
+            }
+        }
+    }
+
+    private String toCsv(List<Integer> days) {
+        if (days == null || days.isEmpty()) return null;
+        return days.stream()
+                .filter(VALID_WEEK_DAYS::contains)
+                .distinct()
+                .sorted(Comparator.naturalOrder())
+                .map(String::valueOf)
+                .collect(Collectors.joining(","));
+    }
+
+    private Set<Integer> toSet(String csv) {
+        if (csv == null || csv.isBlank()) return new HashSet<>();
+        Set<Integer> result = new HashSet<>();
+        for (String s : csv.split(",")) {
+            try {
+                int value = Integer.parseInt(s.trim());
+                if (VALID_WEEK_DAYS.contains(value)) result.add(value);
+            } catch (NumberFormatException ignored) {
+                // Ignore malformed values to keep backward compatibility robust.
+            }
+        }
+        return result;
     }
 
     /**
@@ -382,5 +472,6 @@ public class RecurringTransactionService {
             userName, recurring.getName(), timeText,
             recurring.getAmount(), recurring.getNextExecution(), recurring.getType());
     }
+
 }
 

@@ -32,4 +32,9 @@ public class IncomeController {
         incomeService.deleteIncome(id);
         return ResponseEntity.noContent().build();
     }
+
+    @GetMapping("/all")
+    public ResponseEntity<List<IncomeDTO>> getAllIncomeDesc() {
+        return ResponseEntity.ok(incomeService.getAllIncomeForCurrentUserOrderByDateDesc());
+    }
 }

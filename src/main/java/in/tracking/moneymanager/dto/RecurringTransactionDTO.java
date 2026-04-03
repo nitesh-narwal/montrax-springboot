@@ -3,6 +3,7 @@ package in.tracking.moneymanager.dto;
 import lombok.*;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.List;
 
 /**
  * DTO for recurring transaction.
@@ -30,5 +31,8 @@ public class RecurringTransactionDTO {
     private Boolean isActive;
     private Boolean sendReminder;
     private Integer reminderDaysBefore;
+    private List<Integer> excludedWeekDays; // For DAILY schedules: skip specific weekdays (1=Mon ... 7=Sun)
+    private List<Integer> weekDays;    // For WEEKLY schedules: execute on specific weekdays (1=Mon ... 7=Sun)
+
 }
 
