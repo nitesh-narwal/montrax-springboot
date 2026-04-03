@@ -56,4 +56,16 @@ public interface ExpenceRepository extends JpaRepository<ExpenceEntity, Long> {
 
     // Count old expenses for a profile (for logging/reporting)
     long countByProfileIdAndDateBefore(Long profileId, LocalDate date);
+
+    @Query("""
+       SELECT COALESCE(SUM(e.amount), 0)
+       FROM ExpenceEntity e
+       WHERE e.profile.id = :profileId
+         AND e.date BETWEEN :startDate AND :endDate
+       """)
+    BigDecimal findTotalExpenceByProfileIdAndDateBetween(
+            @Param("profileId") Long profileId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate);
+
 }

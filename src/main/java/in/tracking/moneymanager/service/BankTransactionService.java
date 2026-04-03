@@ -15,8 +15,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.YearMonth;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 
@@ -39,6 +41,8 @@ public class BankTransactionService {
     private final SubscriptionService subscriptionService;
     private final ExpenceService expenceService;
     private final IncomeService incomeService;
+
+    private static final long MAX_RANGE_DAYS = 366;
 
     @Autowired
     public BankTransactionService(
@@ -249,6 +253,32 @@ public class BankTransactionService {
         log.info("Deleted {} bank transactions for profile {}", deleted, profileId);
         return deleted;
     }
+
+    @Transactional(readOnly = true)
+    public Page<BankTransactionDTO> getTransactionsByDateRange(
+            LocalDate startDate, LocalDate endDate, Pageable pageable) {
+
+        if (startDate == null || endDate == null) {
+            throw new IllegalArgumentException("startDate and endDate are required");
+        }
+
+        if (startDate.isAfter(endDate)) {
+            throw new IllegalArgumentException("startDate must be before or equal to endDate");
+        }
+
+        long days = ChronoUnit.DAYS.between(startDate, endDate);
+        if (days > MAX_RANGE_DAYS) {
+            throw new IllegalArgumentException("Date range cannot exceed " + MAX_RANGE_DAYS + " days");
+        }
+
+        Long profileId = profileService.getCurrentProfile().getId();
+
+        return bankTransactionRepository
+                .findByProfileIdAndTransactionDateBetweenOrderByTransactionDateDesc(
+                        profileId, startDate, endDate, pageable)
+                .map(this::toDTO);
+    }
+
 
     /**
      * Delete all unconverted bank transactions.

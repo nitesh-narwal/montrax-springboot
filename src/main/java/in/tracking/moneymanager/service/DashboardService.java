@@ -26,6 +26,8 @@ import static java.util.stream.Stream.concat;
 @Transactional(readOnly = true)
 public class DashboardService {
 
+    private final TotalSummaryService totalSummaryService;
+
     private final ProfileService profileService;
     private final ExpenceService expenceService;
     private final IncomeService incomeService;
@@ -71,16 +73,18 @@ public class DashboardService {
                                 .build()))
                 .sorted((a, b) -> {
                     int cmp = b.getDate().compareTo(a.getDate());
-                    if (cmp != 0 && a.getCreatedAt() != null && b.getCreatedAt() != null) {
+                    if (cmp == 0 && a.getCreatedAt() != null && b.getCreatedAt() != null) {
                         return b.getCreatedAt().compareTo(a.getCreatedAt());
                     }
                     return cmp;
                 }).collect(Collectors.toList());
 
         // Calculate totals
-        BigDecimal totalIncome = incomeService.getTotalIncomeForCurrentUser();
-        BigDecimal totalExpense = expenceService.getTotalExpenceForCurrentUser();
-        BigDecimal balance = totalIncome.subtract(totalExpense);
+        TotalSummaryService.Totals totals = totalSummaryService.getTotals(TotalSummaryService.Period.MONTH);
+        BigDecimal totalIncome = totals.getTotalIncome();
+        BigDecimal totalExpense = totals.getTotalExpense();
+        BigDecimal balance = totals.getBalance();
+
 
         // Build category breakdown for AI analysis
         Map<String, BigDecimal> categoryBreakdown = buildCategoryBreakdown();

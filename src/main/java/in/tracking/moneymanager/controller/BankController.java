@@ -6,10 +6,12 @@ import in.tracking.moneymanager.service.BankTransactionService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 
@@ -175,5 +177,24 @@ public class BankController {
     public ResponseEntity<Map<String, Object>> getImportUsage() {
         return ResponseEntity.ok(bankTransactionService.getImportUsage());
     }
+
+    @GetMapping("/transactions/range")
+    @PremiumFeature(requiredPlans = {"BASIC", "PREMIUM"}, featureName = "Bank Transactions")
+    public ResponseEntity<?> getTransactionsByDateRange(
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate,
+            Pageable pageable) {
+
+        try {
+            return ResponseEntity.ok(
+                    bankTransactionService.getTransactionsByDateRange(startDate, endDate, pageable));
+        } catch (IllegalArgumentException ex) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "success", false,
+                    "message", ex.getMessage()
+            ));
+        }
+    }
+
 }
 

@@ -18,8 +18,8 @@ public interface BankTransactionRepository extends JpaRepository<BankTransaction
     Page<BankTransactionEntity> findByProfileIdOrderByTransactionDateDesc(Long profileId, Pageable pageable);
 
     // Get transactions in a date range for analysis
-    List<BankTransactionEntity> findByProfileIdAndTransactionDateBetween(
-            Long profileId, LocalDate startDate, LocalDate endDate);
+    Page<BankTransactionEntity> findByProfileIdAndTransactionDateBetweenOrderByTransactionDateDesc(
+            Long profileId, LocalDate startDate, LocalDate endDate, Pageable pageable);
 
     // Get transactions that haven't been converted to expense/income yet
     List<BankTransactionEntity> findByProfileIdAndIsConvertedFalse(Long profileId);

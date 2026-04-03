@@ -81,6 +81,13 @@ public class ExpenceService {
         return list.stream().map(this::toDTO).toList();
     }
 
+    public BigDecimal getTotalExpenceForDateRangeForCurrentUser(LocalDate startDate, LocalDate endDate) {
+        ProfileEntity profile = profileService.getCurrentProfile();
+        BigDecimal total = expenceRepository.findTotalExpenceByProfileIdAndDateBetween(profile.getId(), startDate, endDate);
+        return total != null ? total : BigDecimal.ZERO;
+    }
+
+
     /**
      * Add expense for a specific profile (used by recurring transactions).
      * Does not require authentication context.

@@ -45,4 +45,16 @@ public interface IncomeRepository extends JpaRepository<IncomeEntity, Long> {
 
     // Count old incomes for a profile (for logging/reporting)
     long countByProfileIdAndDateBefore(Long profileId, LocalDate date);
+
+    @Query("""
+       SELECT COALESCE(SUM(i.amount), 0)
+       FROM IncomeEntity i
+       WHERE i.profile.id = :profileId
+         AND i.date BETWEEN :startDate AND :endDate
+       """)
+    BigDecimal findTotalIncomeByProfileIdAndDateBetween(
+            @Param("profileId") Long profileId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate);
+
 }

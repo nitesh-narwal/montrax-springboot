@@ -76,6 +76,13 @@ public class IncomeService {
         return list.stream().map(this::toDTO).toList();
     }
 
+    public BigDecimal getTotalIncomeForDateRangeForCurrentUser(LocalDate startDate, LocalDate endDate) {
+        ProfileEntity profile = profileService.getCurrentProfile();
+        BigDecimal total = incomeRepository.findTotalIncomeByProfileIdAndDateBetween(profile.getId(), startDate, endDate);
+        return total != null ? total : BigDecimal.ZERO;
+    }
+
+
     /**
      * Add income for a specific profile (used by recurring transactions).
      * Does not require authentication context.
