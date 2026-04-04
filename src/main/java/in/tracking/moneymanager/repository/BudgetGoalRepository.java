@@ -2,8 +2,10 @@ package in.tracking.moneymanager.repository;
 
 import in.tracking.moneymanager.entity.BudgetGoalEntity;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Optional;
@@ -33,8 +35,10 @@ public interface BudgetGoalRepository extends JpaRepository<BudgetGoalEntity, Lo
     List<BudgetGoalEntity> findBudgetsNeedingAlert(@Param("month") Integer month, @Param("year") Integer year);
 
     // Delete old budgets (more than 1 year old) - for cleanup job
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
     @Query("DELETE FROM BudgetGoalEntity b WHERE b.year < :year")
-    void deleteOldBudgets(@Param("year") Integer year);
+    int deleteOldBudgets(@Param("year") Integer year);
 
     // Delete all budgets for a profile (used for account deletion)
     void deleteByProfileId(Long profileId);

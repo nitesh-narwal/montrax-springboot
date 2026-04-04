@@ -152,11 +152,6 @@ public class BankTransactionService {
             throw new RuntimeException("Access denied - not your transaction");
         }
 
-        // Check if already converted
-        if (txn.getIsConverted()) {
-            throw new RuntimeException("Transaction already converted");
-        }
-
         txn.setCategoryId(categoryId);
 
         // Create a descriptive name
@@ -195,13 +190,11 @@ public class BankTransactionService {
             log.info("Created income {} from bank transaction {}", linkedId, id);
         }
 
-        // Mark as converted
-        txn.setIsConverted(true);
-        txn.setLinkedTransactionId(linkedId);
-        BankTransactionEntity saved = bankTransactionRepository.save(txn);
+        // Reuse centralized conversion logic (validation + ownership + idempotency)
+        BankTransactionDTO converted = markAsConverted(id, linkedId);
 
         log.info("Categorized and converted transaction {} to category {}, linked to {}", id, categoryId, linkedId);
-        return toDTO(saved);
+        return converted;
     }
 
     /**
@@ -298,21 +291,52 @@ public class BankTransactionService {
     }
 
     /**
-     * Mark a transaction as converted (linked to expense/income).
+     * Mark a bank transaction as converted and link it to the created expense/income record.
      *
-     * @param id Transaction ID
-     * @param linkedTransactionId ID of the created expense/income
+     * Safety checks:
+     * - validates input ids
+     * - verifies transaction ownership for current user
+     * - supports idempotent re-calls with same linkedTransactionId
      */
     @Transactional
-    public void markAsConverted(Long id, Long linkedTransactionId) {
+    public BankTransactionDTO markAsConverted(Long id, Long linkedTransactionId) {
+        // Basic input validation to fail fast with clear error messages
+        if (id == null || id <= 0) {
+            throw new IllegalArgumentException("Transaction id must be a positive number");
+        }
+        if (linkedTransactionId == null || linkedTransactionId <= 0) {
+            throw new IllegalArgumentException("linkedTransactionId must be a positive number");
+        }
+
+        Long profileId = profileService.getCurrentProfile().getId();
+
         BankTransactionEntity txn = bankTransactionRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Transaction not found"));
 
+        // Prevent cross-user access
+        if (!txn.getProfileId().equals(profileId)) {
+            throw new RuntimeException("Access denied - not your transaction");
+        }
+
+        // Idempotency: if already converted with same linked id, return current state
+        if (Boolean.TRUE.equals(txn.getIsConverted())) {
+            if (linkedTransactionId.equals(txn.getLinkedTransactionId())) {
+                return toDTO(txn);
+            }
+            // Already converted to a different record -> data integrity protection
+            throw new RuntimeException(
+                    String.format("Transaction already converted and linked to %d", txn.getLinkedTransactionId()));
+        }
+
         txn.setIsConverted(true);
         txn.setLinkedTransactionId(linkedTransactionId);
-        bankTransactionRepository.save(txn);
 
-        log.info("Marked transaction {} as converted, linked to {}", id, linkedTransactionId);
+        BankTransactionEntity saved = bankTransactionRepository.save(txn);
+
+        log.info("Marked transaction {} as converted for profile {}, linked to {}",
+                id, profileId, linkedTransactionId);
+
+        return toDTO(saved);
     }
 
     /**

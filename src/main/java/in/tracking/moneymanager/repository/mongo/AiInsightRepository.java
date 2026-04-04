@@ -34,6 +34,6 @@ public interface AiInsightRepository extends MongoRepository<AiInsightDocument, 
     List<AiInsightDocument> findByProfileIdAndInsightTypeAndCreatedAtAfter(Long profileId, String insightType, LocalDateTime after);
 
     // Delete old insights by type (for cleanup)
-    void deleteByProfileIdAndInsightTypeAndCreatedAtBefore(Long profileId, String insightType, LocalDateTime before);
+    long deleteByProfileIdAndInsightTypeAndCreatedAtBefore(Long profileId, String insightType, LocalDateTime before);
 }
 

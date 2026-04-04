@@ -18,8 +18,10 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
+import java.time.Year;
 import java.time.YearMonth;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
@@ -41,12 +43,17 @@ public class BudgetGoalService {
     private final ProfileService profileService;
     private final EmailService emailService;
 
+
     /**
      * Get all budget goals for current month with progress calculations.
      */
+    @Transactional(readOnly = false)
     public List<BudgetGoalDTO> getCurrentMonthBudgets() {
         Long profileId = profileService.getCurrentProfile().getId();
         YearMonth current = YearMonth.now();
+
+        // Ensure current month has recurring budget entries before reading.
+        initializeCurrentMonthRecurringBudgets(profileId, current);
 
         List<BudgetGoalEntity> budgets = budgetGoalRepository
                 .findByProfileIdAndMonthAndYear(profileId, current.getMonthValue(), current.getYear());
@@ -124,6 +131,24 @@ public class BudgetGoalService {
         log.info("Deleted budget goal: {} (profile: {})", budgetId, profileId);
     }
 
+    /**
+     * Cleanup job: removes budget rows older than retention window.
+     * Runs once a month on day 1 at 2:30 AM IST.
+     */
+    @Scheduled(cron = "0 30 2 1 * *", zone = "Asia/Kolkata")
+    @Transactional
+    public void cleanupOldBudgets() {
+        int deleted = cleanupOldBudgetsNow();
+        log.info("Budget cleanup complete. Deleted {} rows", deleted);
+    }
+
+    @Transactional
+    public int cleanupOldBudgetsNow() {
+        int cutoffYear = Year.now().minusYears(1).getValue();
+        int deleted = budgetGoalRepository.deleteOldBudgets(cutoffYear);
+        log.info("Deleted {} budget rows older than year {}", deleted, cutoffYear);
+        return deleted;
+    }
     /**
      * Check budget status after adding an expense.
      * Returns warning message if near or over budget.
@@ -256,6 +281,64 @@ public class BudgetGoalService {
         }
 
         log.info("Budget alert job complete. Sent {} alerts", alertsSent);
+    }
+
+    /**
+     * Auto-seeds current month budgets from user's recurring templates when missing.
+     * This keeps UX smooth even if monthly scheduler was skipped.
+     */
+    protected void initializeCurrentMonthRecurringBudgets(Long profileId, YearMonth current) {
+        List<BudgetGoalEntity> currentMonthBudgets = budgetGoalRepository
+                .findByProfileIdAndMonthAndYear(profileId, current.getMonthValue(), current.getYear());
+
+        // Already initialized for this month
+        if (!currentMonthBudgets.isEmpty()) {
+            return;
+        }
+
+        List<BudgetGoalEntity> recurringBudgets = budgetGoalRepository
+                .findByProfileIdAndIsRecurringTrue(profileId);
+
+        if (recurringBudgets.isEmpty()) {
+            return;
+        }
+
+        // Pick latest recurring budget per category (null category = overall budget)
+        Map<Long, BudgetGoalEntity> latestByCategory = new java.util.HashMap<>();
+        for (BudgetGoalEntity b : recurringBudgets) {
+            Long key = b.getCategoryId(); // null means overall budget
+            BudgetGoalEntity existing = latestByCategory.get(key);
+
+            if (existing == null || isNewerBudget(b, existing)) {
+                latestByCategory.put(key, b);
+            }
+        }
+
+        for (BudgetGoalEntity template : latestByCategory.values()) {
+            BudgetGoalEntity newBudget = BudgetGoalEntity.builder()
+                    .profileId(profileId)
+                    .categoryId(template.getCategoryId())
+                    .month(current.getMonthValue())
+                    .year(current.getYear())
+                    .budgetAmount(template.getBudgetAmount())
+                    .alertThreshold(template.getAlertThreshold())
+                    .isRecurring(true)
+                    .alertSent(false)
+                    .build();
+
+            budgetGoalRepository.save(newBudget);
+        }
+
+        log.info("Initialized {} recurring budgets for profile {} for {}/{}",
+                latestByCategory.size(), profileId, current.getMonthValue(), current.getYear());
+    }
+
+    /** Compares budget period recency using year/month. */
+    private boolean isNewerBudget(BudgetGoalEntity candidate, BudgetGoalEntity base) {
+        if (!candidate.getYear().equals(base.getYear())) {
+            return candidate.getYear() > base.getYear();
+        }
+        return candidate.getMonth() > base.getMonth();
     }
 
     // ==================== Private Helper Methods ====================

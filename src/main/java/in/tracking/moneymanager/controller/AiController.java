@@ -67,7 +67,12 @@ public class AiController {
     @PremiumFeature(requiredPlans = {"BASIC", "PREMIUM"}, featureName = "Financial Health Score")
     public ResponseEntity<Map<String, Object>> getFinancialHealth(
             @RequestParam(required = false, defaultValue = "false") boolean refresh) {
-        return ResponseEntity.ok(aiAnalysisService.getFinancialHealth(refresh));
+
+        Map<String, Object> data = refresh
+                ? aiAnalysisService.getFinancialHealth(true)   // force fresh AI call
+                : aiAnalysisService.getFinancialHealth();      // cached/default path
+
+        return ResponseEntity.ok(data);
     }
 
     /**
@@ -100,8 +105,17 @@ public class AiController {
      */
     @GetMapping("/insights")
     @PremiumFeature(requiredPlans = {"BASIC", "PREMIUM"}, featureName = "AI Insights")
-    public ResponseEntity<List<AiInsightDocument>> getInsights() {
-        return ResponseEntity.ok(aiAnalysisService.getInsights());
+    public ResponseEntity<?> getInsights(
+            @RequestParam(required = false) String priority,
+            @RequestParam(required = false, name = "type") String insightType) {
+        try {
+            return ResponseEntity.ok(aiAnalysisService.getInsights(priority, insightType));
+        } catch (IllegalArgumentException ex) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "success", false,
+                    "message", ex.getMessage()
+            ));
+        }
     }
 
     /**
@@ -160,6 +174,22 @@ public class AiController {
     @PremiumFeature(requiredPlans = {"BASIC", "PREMIUM"}, featureName = "AI Insights")
     public ResponseEntity<Map<String, Object>> markInsightActionTaken(@PathVariable String insightId) {
         return ResponseEntity.ok(aiAnalysisService.markInsightActionTaken(insightId));
+    }
+
+    @GetMapping("/insights/recent")
+    @PremiumFeature(requiredPlans = {"BASIC", "PREMIUM"}, featureName = "AI Insights")
+    public ResponseEntity<List<AiInsightDocument>> getRecentInsights(
+            @RequestParam(name = "type") String insightType,
+            @RequestParam(defaultValue = "24") int hours) {
+        return ResponseEntity.ok(aiAnalysisService.getRecentInsightsByType(insightType, hours));
+    }
+
+    @PostMapping("/insights/cleanup")
+    @PremiumFeature(requiredPlans = {"BASIC", "PREMIUM"}, featureName = "AI Insights")
+    public ResponseEntity<Map<String, Object>> cleanupInsights(
+            @RequestParam(name = "type") String insightType,
+            @RequestParam(defaultValue = "90") int retentionDays) {
+        return ResponseEntity.ok(aiAnalysisService.cleanupOldInsightsByType(insightType, retentionDays));
     }
 }
 

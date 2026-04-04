@@ -99,6 +99,8 @@ public class ProfileController {
             // Get current user's profile
             Long userId = profileService.getCurrentProfile().getId();
 
+            boolean hadPreviousImage = cloudinaryService.profileImageExists(userId);
+
             // Upload to Cloudinary
             String imageUrl = cloudinaryService.uploadProfileImage(file, userId);
 
@@ -108,6 +110,7 @@ public class ProfileController {
             return ResponseEntity.ok(Map.of(
                 "success", true,
                 "message", "Profile image uploaded successfully",
+                    "hadPreviousImage", hadPreviousImage,
                 "profileImageUrl", imageUrl,
                 "profile", updatedProfile
             ));

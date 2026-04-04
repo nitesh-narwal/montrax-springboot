@@ -375,13 +375,64 @@ public class AiAnalysisService {
      *
      * @return List of AI insights
      */
-    public List<AiInsightDocument> getInsights() {
+    // in AiAnalysisService.java
+
+    public List<AiInsightDocument> getInsights(String priority, String insightType) {
         if (aiInsightRepository == null) {
             log.warn("MongoDB not configured - cannot retrieve AI insights");
             return Collections.emptyList();
         }
+
         Long profileId = profileService.getCurrentProfile().getId();
+        String normalizedPriority = normalizePriority(priority);
+        String normalizedInsightType = normalizeInsightType(insightType);
+
+        // If both filters are present, use repository for one and filter second in-memory.
+        // (Keeps your requested methods in active use without changing repository contract.)
+        if (normalizedPriority != null && normalizedInsightType != null) {
+            return aiInsightRepository.findByProfileIdAndInsightType(profileId, normalizedInsightType).stream()
+                    .filter(i -> normalizedPriority.equalsIgnoreCase(i.getPriority()))
+                    .sorted(Comparator.comparing(AiInsightDocument::getCreatedAt).reversed())
+                    .toList();
+        }
+
+        if (normalizedPriority != null) {
+            return aiInsightRepository.findByProfileIdAndPriority(profileId, normalizedPriority).stream()
+                    .sorted(Comparator.comparing(AiInsightDocument::getCreatedAt).reversed())
+                    .toList();
+        }
+
+        if (normalizedInsightType != null) {
+            return aiInsightRepository.findByProfileIdAndInsightType(profileId, normalizedInsightType).stream()
+                    .sorted(Comparator.comparing(AiInsightDocument::getCreatedAt).reversed())
+                    .toList();
+        }
+
         return aiInsightRepository.findByProfileIdOrderByCreatedAtDesc(profileId);
+    }
+
+    public List<AiInsightDocument> getInsights() {
+        return getInsights(null, null);
+    }
+
+    private String normalizePriority(String priority) {
+        if (priority == null || priority.isBlank()) return null;
+        String p = priority.trim().toUpperCase(Locale.ROOT);
+        Set<String> allowed = Set.of("HIGH", "MEDIUM", "LOW");
+        if (!allowed.contains(p)) {
+            throw new IllegalArgumentException("Invalid priority. Allowed: HIGH, MEDIUM, LOW");
+        }
+        return p;
+    }
+
+    private String normalizeInsightType(String insightType) {
+        if (insightType == null || insightType.isBlank()) return null;
+        String t = insightType.trim().toUpperCase(Locale.ROOT);
+        Set<String> allowed = Set.of("SPENDING_ANALYSIS", "SAVINGS_STRATEGY", "FINANCIAL_HEALTH");
+        if (!allowed.contains(t)) {
+            throw new IllegalArgumentException("Invalid insightType. Allowed: SPENDING_ANALYSIS, SAVINGS_STRATEGY, FINANCIAL_HEALTH");
+        }
+        return t;
     }
 
     /**
@@ -597,6 +648,28 @@ public class AiAnalysisService {
     }
 
     /**
+     * Get insights of a specific type created within the last N hours.
+     * Useful for lightweight, incremental UI refresh.
+     */
+    public List<AiInsightDocument> getRecentInsightsByType(String insightType, int hours) {
+        if (aiInsightRepository == null) {
+            return Collections.emptyList();
+        }
+
+        Long profileId = profileService.getCurrentProfile().getId();
+        String normalizedType = normalizeInsightType(insightType);
+        int safeHours = Math.max(1, hours); // Prevent invalid/zero windows
+
+        LocalDateTime after = LocalDateTime.now().minusHours(safeHours);
+
+        return aiInsightRepository
+                .findByProfileIdAndInsightTypeAndCreatedAtAfter(profileId, normalizedType, after)
+                .stream()
+                .sorted(Comparator.comparing(AiInsightDocument::getCreatedAt).reversed())
+                .toList();
+    }
+
+    /**
      * Calculate savings rate as percentage.
      */
     private BigDecimal calculateSavingsRate(BigDecimal income, BigDecimal expense) {
@@ -608,6 +681,33 @@ public class AiAnalysisService {
                 .divide(income, 2, RoundingMode.HALF_UP);
     }
 
+    /**
+     * Delete old insights of a specific type for current user.
+     * Helps keep Mongo collections small and fast.
+     */
+    public Map<String, Object> cleanupOldInsightsByType(String insightType, int retentionDays) {
+        if (aiInsightRepository == null) {
+            return Map.of("success", false, "message", "MongoDB not configured");
+        }
+
+        Long profileId = profileService.getCurrentProfile().getId();
+        String normalizedType = normalizeInsightType(insightType);
+        int safeDays = Math.max(1, retentionDays);
+
+        LocalDateTime cutoff = LocalDateTime.now().minusDays(safeDays);
+
+        // Returns number of deleted documents
+        long deletedCount = aiInsightRepository
+                .deleteByProfileIdAndInsightTypeAndCreatedAtBefore(profileId, normalizedType, cutoff);
+
+        return Map.of(
+                "success", true,
+                "insightType", normalizedType,
+                "retentionDays", safeDays,
+                "cutoff", cutoff,
+                "deleteCount", deletedCount
+        );
+    }
     // ==================== Prompt Builders ====================
 
     private String buildSpendingAnalysisPrompt(BigDecimal income, BigDecimal expense,

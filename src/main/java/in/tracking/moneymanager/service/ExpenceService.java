@@ -7,6 +7,7 @@ import in.tracking.moneymanager.entity.ProfileEntity;
 import in.tracking.moneymanager.repository.CategoryRepository;
 import in.tracking.moneymanager.repository.ExpenceRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -15,6 +16,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
@@ -23,6 +25,7 @@ public class ExpenceService {
     private final CategoryRepository categoryRepository;
     private final ExpenceRepository expenceRepository;
     private final ProfileService profileService;
+    private final BudgetGoalService budgetGoalService;
 
     @Transactional
     public ExpenceDTO addExpence(ExpenceDTO dto) {
@@ -31,6 +34,14 @@ public class ExpenceService {
                 .orElseThrow(() -> new RuntimeException("Category not found with id: " + dto.getCategoryId()));
         ExpenceEntity newExpence = toEntity(dto, profile, category);
         ExpenceEntity savedExpence = expenceRepository.save(newExpence);
+        // budget warning hook
+        String warning = budgetGoalService.checkBudgetStatus(
+                category.getId(),
+                profile.getId()
+        );
+        if (warning != null) {
+            log.info("Budget warning for profile {}: {}", profile.getId(), warning);
+        }
         return toDTO(savedExpence);
     }
 

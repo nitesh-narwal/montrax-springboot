@@ -2,8 +2,10 @@ package in.tracking.moneymanager.service;
 
 import in.tracking.moneymanager.dto.SubscriptionDTO;
 import in.tracking.moneymanager.dto.SubscriptionPlanDTO;
+import in.tracking.moneymanager.entity.ProfileEntity;
 import in.tracking.moneymanager.entity.SubscriptionEntity;
 import in.tracking.moneymanager.entity.SubscriptionPlanEntity;
+import in.tracking.moneymanager.repository.ProfileRepository;
 import in.tracking.moneymanager.repository.SubscriptionPlanRepository;
 import in.tracking.moneymanager.repository.SubscriptionRepository;
 import lombok.RequiredArgsConstructor;
@@ -36,6 +38,9 @@ public class SubscriptionService {
     private final SubscriptionRepository subscriptionRepository;
     private final SubscriptionPlanRepository subscriptionPlanRepository;
     private final ProfileService profileService;
+
+    private final EmailService emailService;
+    private final ProfileRepository profileRepository;
 
     /**
      * Get all available subscription plans for display.
@@ -214,7 +219,7 @@ public class SubscriptionService {
             sub.setStatus("GRACE_PERIOD");
             subscriptionRepository.save(sub);
             log.info("Subscription {} moved to grace period", sub.getId());
-            // TODO: Send email notification about grace period
+            sendGracePeriodEmail(sub);
         }
 
         // Find grace period subscriptions older than 3 days
@@ -226,11 +231,52 @@ public class SubscriptionService {
             sub.setStatus("EXPIRED");
             subscriptionRepository.save(sub);
             log.info("Subscription {} expired after grace period", sub.getId());
-            // TODO: Send email notification about expiry
+            sendExpiredEmail(sub);
         }
 
         log.info("Subscription expiry check complete. " +
                 "Moved {} to grace, {} expired", expired.size(), gracePeriodExpired.size());
+    }
+
+    /**
+     * Send subscription expiry reminders for active subscribers.
+     * Runs daily at 9:30 AM IST.
+     */
+    @Scheduled(cron = "0 30 9 * * *", zone = "Asia/Kolkata")
+    @Transactional(readOnly = true)
+    public void sendSubscriptionExpiryReminders() {
+        LocalDate today = LocalDate.now();
+        sendExpiryReminderForDate(today.plusDays(7), 7);
+        sendExpiryReminderForDate(today.plusDays(3), 3);
+        sendExpiryReminderForDate(today.plusDays(1), 1);
+    }
+
+    private void sendExpiryReminderForDate(LocalDate targetDate, int daysLeft) {
+        List<SubscriptionEntity> subscriptions =
+                subscriptionRepository.findByEndDateAndStatus(targetDate, "ACTIVE");
+
+        int sent = 0;
+        for (SubscriptionEntity sub : subscriptions) {
+            try {
+                profileRepository.findById(sub.getProfileId()).ifPresent(profile -> {
+                    if (profile.getEmail() != null && !profile.getEmail().isBlank()) {
+                        String subject = daysLeft == 1
+                                ? "Your Money Manager subscription expires tomorrow"
+                                : "Your Money Manager subscription expires in " + daysLeft + " days";
+
+                        String body = buildExpiryReminderEmail(profile, sub, daysLeft);
+                        emailService.sendEmail(profile.getEmail(), subject, body);
+                    }
+                });
+                sent++;
+            } catch (Exception e) {
+                log.warn("Failed to send expiry reminder for subscription {}: {}", sub.getId(), e.getMessage());
+            }
+        }
+
+        if (!subscriptions.isEmpty()) {
+            log.info("Expiry reminders ({}) complete. Found {}, sent {}", daysLeft, subscriptions.size(), sent);
+        }
     }
 
     // ==================== Helper Methods ====================
@@ -278,6 +324,80 @@ public class SubscriptionService {
                 .aiQueriesUsed(0)
                 .csvImportsUsed(0)
                 .build();
+    }
+
+    private void sendGracePeriodEmail(SubscriptionEntity subscription) {
+        try {
+            profileRepository.findById(subscription.getProfileId()).ifPresent(profile -> {
+                if (profile.getEmail() == null || profile.getEmail().isBlank()) return;
+
+                String subject = "Subscription in Grace Period - Renew to Keep Premium Access";
+                String body = buildGracePeriodEmail(profile, subscription);
+                emailService.sendEmail(profile.getEmail(), subject, body);
+            });
+        } catch (Exception e) {
+            // Do not fail subscription status updates because of mail failure
+            log.warn("Failed to send grace period email for subscription {}: {}", subscription.getId(), e.getMessage());
+        }
+    }
+
+    private void sendExpiredEmail(SubscriptionEntity subscription) {
+        try {
+            profileRepository.findById(subscription.getProfileId()).ifPresent(profile -> {
+                if (profile.getEmail() == null || profile.getEmail().isBlank()) return;
+
+                String subject = "Subscription Expired - You are now on Free Plan";
+                String body = buildExpiredEmail(profile, subscription);
+                emailService.sendEmail(profile.getEmail(), subject, body);
+            });
+        } catch (Exception e) {
+            // Do not fail subscription status updates because of mail failure
+            log.warn("Failed to send expiry email for subscription {}: {}", subscription.getId(), e.getMessage());
+        }
+    }
+
+    private String buildExpiryReminderEmail(ProfileEntity profile, SubscriptionEntity sub, int daysLeft) {
+        String name = profile.getFullname() != null ? profile.getFullname() : "User";
+        return String.format(
+                "<html><body style='font-family:Arial,sans-serif;'>" +
+                        "<h2>Subscription Renewal Reminder</h2>" +
+                        "<p>Hello %s,</p>" +
+                        "<p>Your <strong>%s</strong> plan expires in <strong>%d day(s)</strong> on <strong>%s</strong>.</p>" +
+                        "<p>Renew now to avoid interruption in premium features like AI insights and bank import.</p>" +
+                        "<p>Thank you,<br/>Money Manager Team</p>" +
+                        "</body></html>",
+                name, sub.getPlanType(), daysLeft, sub.getEndDate()
+        );
+    }
+
+    private String buildGracePeriodEmail(ProfileEntity profile, SubscriptionEntity sub) {
+        String name = profile.getFullname() != null ? profile.getFullname() : "User";
+        LocalDate graceEnds = sub.getEndDate().plusDays(3);
+
+        return String.format(
+                "<html><body style='font-family:Arial,sans-serif;'>" +
+                        "<h2>Your Subscription is in Grace Period</h2>" +
+                        "<p>Hello %s,</p>" +
+                        "<p>Your <strong>%s</strong> subscription has expired on <strong>%s</strong>.</p>" +
+                        "<p>You are now in a 3-day grace period until <strong>%s</strong>. Renew before this date to keep premium access.</p>" +
+                        "<p>Regards,<br/>Money Manager Team</p>" +
+                        "</body></html>",
+                name, sub.getPlanType(), sub.getEndDate(), graceEnds
+        );
+    }
+
+    private String buildExpiredEmail(ProfileEntity profile, SubscriptionEntity sub) {
+        String name = profile.getFullname() != null ? profile.getFullname() : "User";
+        return String.format(
+                "<html><body style='font-family:Arial,sans-serif;'>" +
+                        "<h2>Subscription Expired</h2>" +
+                        "<p>Hello %s,</p>" +
+                        "<p>Your <strong>%s</strong> subscription has fully expired after grace period.</p>" +
+                        "<p>Your account is now on the Free plan. Upgrade anytime to restore premium limits and features.</p>" +
+                        "<p>Best regards,<br/>Money Manager Team</p>" +
+                        "</body></html>",
+                name, sub.getPlanType()
+        );
     }
 }
 
