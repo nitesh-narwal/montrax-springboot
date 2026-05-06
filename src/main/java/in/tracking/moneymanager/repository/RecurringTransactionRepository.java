@@ -1,5 +1,6 @@
 package in.tracking.moneymanager.repository;
 
+import in.tracking.moneymanager.entity.ProfileEntity;
 import in.tracking.moneymanager.entity.RecurringTransactionEntity;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
@@ -16,7 +17,7 @@ import java.util.List;
 public interface RecurringTransactionRepository extends JpaRepository<RecurringTransactionEntity, Long> {
 
     // Find all active recurring transactions for a user
-    List<RecurringTransactionEntity> findByProfileIdAndIsActiveTrue(Long profileId);
+    List<RecurringTransactionEntity> findByProfileIdAndIsActiveTrue(ProfileEntity profile);
 
     // Find transactions due for execution today or earlier (batch limited for safety)
     @Query("SELECT r FROM RecurringTransactionEntity r WHERE r.isActive = true " +
@@ -38,7 +39,7 @@ public interface RecurringTransactionRepository extends JpaRepository<RecurringT
     void resetReminderFlags(@Param("ids") List<Long> ids);
 
     // Count active recurring for a profile (for limits)
-    long countByProfileIdAndIsActiveTrue(Long profileId);
+    long countByProfileIdAndIsActiveTrue(ProfileEntity profile);
 
     // Delete all recurring transactions for a profile (used for account deletion)
     void deleteByProfileId(Long profileId);

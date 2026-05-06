@@ -7,6 +7,7 @@ import com.razorpay.Utils;
 import in.tracking.moneymanager.dto.PaymentOrderDTO;
 import in.tracking.moneymanager.dto.PaymentVerifyDTO;
 import in.tracking.moneymanager.entity.PaymentHistoryEntity;
+import in.tracking.moneymanager.entity.ProfileEntity;
 import in.tracking.moneymanager.entity.SubscriptionPlanEntity;
 import in.tracking.moneymanager.repository.PaymentHistoryRepository;
 import in.tracking.moneymanager.repository.SubscriptionPlanRepository;
@@ -114,9 +115,9 @@ public class PaymentService {
         log.info("Created Razorpay order: {} for plan: {} ({})", orderId, plan.getName(), billingCycle);
 
         // Record pending payment in database with plan info
-        Long profileId = profileService.getCurrentProfile().getId();
+        ProfileEntity profile = profileService.getCurrentProfile();
         PaymentHistoryEntity payment = PaymentHistoryEntity.builder()
-                .profileId(profileId)
+                .profile(profile)
                 .razorpayOrderId(orderId)
                 .amount(price)
                 .currency("INR")
@@ -208,16 +209,16 @@ public class PaymentService {
             payment.setPaymentMethod("RAZORPAY"); // Reset to actual payment method
             paymentHistoryRepository.save(payment);
 
-            // Activate subscription for the user
+            // Activate subscription for the user- use profile.getId() instead of profileId
             subscriptionService.activateSubscription(
-                    payment.getProfileId(),
+                    payment.getProfile().getId(), // ✅ Get ID from profile object
                     planId,
                     billingCycle,
                     verifyDTO.getRazorpayPaymentId()
             );
 
             log.info("Payment verified and subscription activated. Order: {}, Profile: {}",
-                    verifyDTO.getRazorpayOrderId(), payment.getProfileId());
+                    verifyDTO.getRazorpayOrderId(), payment.getProfile());
             return true;
 
         } catch (RazorpayException e) {
@@ -237,8 +238,8 @@ public class PaymentService {
      * @return List of payment transactions
      */
     public List<PaymentHistoryEntity> getPaymentHistory() {
-        Long profileId = profileService.getCurrentProfile().getId();
-        return paymentHistoryRepository.findByProfileIdOrderByCreatedAtDesc(profileId);
+        ProfileEntity profile = profileService.getCurrentProfile();
+        return paymentHistoryRepository.findByProfileIdOrderByCreatedAtDesc(profile);
     }
 
     /**
@@ -250,11 +251,12 @@ public class PaymentService {
      */
     @Transactional
     public boolean deletePaymentHistory(Long paymentId) {
-        Long profileId = profileService.getCurrentProfile().getId();
+        ProfileEntity currentProfile = profileService.getCurrentProfile();
+        Long profileId = currentProfile.getId();
 
         return paymentHistoryRepository.findById(paymentId)
-                .filter(payment -> payment.getProfileId().equals(profileId))
-                .filter(payment -> !"SUCCESS".equals(payment.getStatus())) // Don't delete successful payments
+                .filter(payment -> payment.getProfile().getId().equals(profileId))  // ✅ Use relationship
+                .filter(payment -> !"SUCCESS".equals(payment.getStatus()))
                 .map(payment -> {
                     paymentHistoryRepository.delete(payment);
                     log.info("Deleted payment history {} for profile {}", paymentId, profileId);
@@ -270,20 +272,19 @@ public class PaymentService {
      */
     @Transactional
     public int deleteAllPaymentHistory() {
-        Long profileId = profileService.getCurrentProfile().getId();
+        ProfileEntity currentProfile = profileService.getCurrentProfile();
         List<PaymentHistoryEntity> payments = paymentHistoryRepository
-                .findByProfileIdOrderByCreatedAtDesc(profileId);
+                .findByProfileIdOrderByCreatedAtDesc(currentProfile);  // ✅ Use ProfileEntity
 
         int deleted = 0;
         for (PaymentHistoryEntity payment : payments) {
-            // Only delete PENDING or FAILED payments
             if (!"SUCCESS".equals(payment.getStatus())) {
                 paymentHistoryRepository.delete(payment);
                 deleted++;
             }
         }
 
-        log.info("Deleted {} payment history records for profile {}", deleted, profileId);
+        log.info("Deleted {} payment history records for profile {}", deleted, currentProfile.getId());
         return deleted;
     }
 
@@ -294,14 +295,14 @@ public class PaymentService {
      */
     @Transactional
     public int clearAllPaymentHistory() {
-        Long profileId = profileService.getCurrentProfile().getId();
+        ProfileEntity currentProfile = profileService.getCurrentProfile();
         List<PaymentHistoryEntity> payments = paymentHistoryRepository
-                .findByProfileIdOrderByCreatedAtDesc(profileId);
+                .findByProfileIdOrderByCreatedAtDesc(currentProfile);  // ✅ Use ProfileEntity
 
         int count = payments.size();
         paymentHistoryRepository.deleteAll(payments);
 
-        log.info("Cleared all {} payment history records for profile {}", count, profileId);
+        log.info("Cleared all {} payment history records for profile {}", count, currentProfile.getId());
         return count;
     }
 
