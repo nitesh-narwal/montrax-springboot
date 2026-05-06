@@ -1,0 +1,2613 @@
+I'll continue and complete the comprehensive documentation for your Money Manager backend project. Let me create the full documentation in a structured format.Let me continue creating the comprehensive documentation for your Money Manager backend project. I'll break this into structured sections:
+
+---
+
+# 💰 Money Manager - Backend API Documentation
+
+## Production-Level Technical Documentation v1.0
+
+---
+
+# Table of Contents
+
+1. [System Overview](#1-system-overview)
+2. [Architecture & Design](#2-architecture--design)
+3. [Authentication & Security](#3-authentication--security)
+4. [API Endpoints](#4-api-endpoints)
+5. [Database Design](#5-database-design)
+6. [Analytics & Insights](#6-analytics--insights)
+7. [User Workflows](#7-user-workflows)
+8. [Error Handling](#8-error-handling)
+9. [UI/Frontend Hints](#9-uifrontend-hints)
+10. [Advanced Notes](#10-advanced-notes)
+
+---
+
+# 1. System Overview
+
+## 1.1 What This System Does
+
+### Simple Terms
+Money Manager is a personal finance tracking application that helps users:
+- Track daily income and expenses
+- Set and monitor budgets per category
+- Import bank statements (CSV)
+- Get AI-powered financial insights
+- Receive automated reminders for recurring payments
+- View analytics and spending trends
+
+### Technical Terms
+A multi-tier Spring Boot REST API application featuring:
+- JWT-based stateless authentication
+- Multi-database architecture (PostgreSQL + MongoDB + Redis)
+- AI integration via Google Gemini API
+- Payment gateway integration (Razorpay)
+- Scheduled background jobs for automation
+- Subscription-based feature gating with AOP
+
+## 1.2 High-Level Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              FRONTEND (React)                                │
+│                          (Separate Repository)                               │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                     │
+                                     │ HTTPS + JWT
+                                     ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         SPRING BOOT APPLICATION                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐    │
+│  │   Security   │  │  Controllers │  │   Aspects    │  │  Schedulers  │    │
+│  │   Filter     │  │   (REST)     │  │  (Premium)   │  │   (Jobs)     │    │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘    │
+│         │                 │                 │                 │             │
+│         ▼                 ▼                 ▼                 ▼             │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                         SERVICE LAYER                                │   │
+│  │  ProfileService │ ExpenceService │ IncomeService │ AnalyticsService │   │
+│  │  CategoryService│ BudgetService  │ AiService     │ SubscriptionSvc  │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                     │                                        │
+│                                     ▼                                        │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                       REPOSITORY LAYER (JPA + MongoDB)               │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────┘
+           │                          │                          │
+           ▼                          ▼                          ▼
+┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
+│   PostgreSQL     │    │     MongoDB      │    │      Redis       │
+│   (Primary DB)   │    │   (AI History)   │    │    (Caching)     │
+│                  │    │                  │    │                  │
+│ • Users          │    │ • AI Insights    │    │ • Session Data   │
+│ • Transactions   │    │ • Query History  │    │ • API Cache      │
+│ • Categories     │    │                  │    │ • Rate Limits    │
+│ • Subscriptions  │    │                  │    │                  │
+└──────────────────┘    └──────────────────┘    └──────────────────┘
+           │
+           ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         EXTERNAL SERVICES                                    │
+├──────────────────┬──────────────────┬──────────────────┬───────────────────┤
+│   Razorpay       │   Google Gemini  │   Cloudinary     │   SMTP (Email)    │
+│   (Payments)     │   (AI Analysis)  │   (Images)       │   (Notifications) │
+└──────────────────┴──────────────────┴──────────────────┴───────────────────┘
+```
+
+
+## 1.3 Request-Response Flow
+
+```
+┌─────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│ Client  │────▶│ JWT Filter  │────▶│ Controller  │────▶│  Service    │
+└─────────┘     └─────────────┘     └─────────────┘     └─────────────┘
+                      │                    │                   │
+                      │ Validate           │ Parse             │ Business
+                      │ Token              │ Request           │ Logic
+                      ▼                    ▼                   ▼
+               ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+               │  Security   │     │ Premium     │     │ Repository  │
+               │  Context    │     │ Aspect      │     │  Layer      │
+               └─────────────┘     └─────────────┘     └─────────────┘
+                                                              │
+                                                              ▼
+                                                       ┌─────────────┐
+                                                       │  Database   │
+                                                       └─────────────┘
+```
+
+
+**Step-by-Step Flow:**
+
+1. **Request Arrives** → Client sends HTTP request with JWT in `Authorization` header
+2. **JWT Filter** → `JwtRequestFilter` extracts and validates token
+3. **Security Context** → User principal is set in `SecurityContextHolder`
+4. **Controller** → Receives request, validates input
+5. **Premium Aspect** → `@PremiumFeature` checks subscription level
+6. **Service Layer** → Executes business logic
+7. **Repository** → Performs database operations
+8. **Response** → JSON response returned to client
+
+---
+
+# 2. Architecture & Design
+
+## 2.1 Layer Architecture
+
+### Controller Layer
+**Purpose:** HTTP request handling, input validation, response formatting
+
+| Controller | Base Path | Responsibility |
+|------------|-----------|----------------|
+| `ProfileController` | `/`, `/profile` | User auth, registration, password reset |
+| `ExpenceController` | `/expences` | Expense CRUD operations |
+| `IncomeController` | `/incomes` | Income CRUD operations |
+| `CategoryController` | `/categories` | Category management |
+| `DashboardController` | `/dashboard` | Dashboard data aggregation |
+| `AnalyticsController` | `/api/analytics` | Chart data & statistics |
+| `BudgetGoalController` | `/api/budgets` | Budget limits & tracking |
+| `RecurringTransactionController` | `/api/recurring` | Recurring transactions |
+| `AiController` | `/api/ai` | AI-powered insights |
+| `SmartInsightsController` | `/api/insights` | Predictions & anomalies |
+| `SubscriptionController` | `/api/subscription` | Plan management |
+| `PaymentController` | `/api/payments` | Razorpay integration |
+| `BankController` | `/api/bank` | CSV import |
+| `TotalsController` | `/api/totals` | Summary totals |
+| `FilterController` | `/filter` | Transaction filtering |
+
+### Service Layer
+**Purpose:** Business logic, data transformation, external integrations
+
+| Service | Key Responsibilities |
+|---------|---------------------|
+| `ProfileService` | User management, authentication, password reset |
+| `ExpenceService` | Expense operations, budget integration |
+| `IncomeService` | Income operations |
+| `CategoryService` | Category CRUD per user |
+| `DashboardService` | Aggregated dashboard data |
+| `AnalyticsService` | Statistical calculations for charts |
+| `BudgetGoalService` | Budget tracking, alerts |
+| `RecurringTransactionService` | Auto-transaction scheduling |
+| `AiAnalysisService` | Gemini AI integration |
+| `SmartInsightsService` | Predictions, anomaly detection |
+| `SubscriptionService` | Subscription lifecycle |
+| `PaymentService` | Razorpay payments |
+| `BankTransactionService` | CSV parsing, categorization |
+| `NotificationService` | Email reminders |
+| `DataRetentionService` | Data cleanup by plan |
+
+### Repository Layer
+**Purpose:** Database access abstraction
+
+| Repository | Database | Table/Collection |
+|------------|----------|------------------|
+| `ProfileRepository` | PostgreSQL | `tbl_profiles` |
+| `ExpenceRepository` | PostgreSQL | `tbl_expences` |
+| `IncomeRepository` | PostgreSQL | `tbl_incomes` |
+| `CategoryRepository` | PostgreSQL | `tbl_category` |
+| `BudgetGoalRepository` | PostgreSQL | `tbl_budget_goals` |
+| `RecurringTransactionRepository` | PostgreSQL | `tbl_recurring_transactions` |
+| `SubscriptionRepository` | PostgreSQL | `tbl_subscriptions` |
+| `SubscriptionPlanRepository` | PostgreSQL | `tbl_subscription_plans` |
+| `PaymentHistoryRepository` | PostgreSQL | `tbl_payment_history` |
+| `BankTransactionRepository` | PostgreSQL | `tbl_bank_transactions` |
+| `AiInsightRepository` | MongoDB | `ai_insights` |
+| `AiQueryHistoryRepository` | MongoDB | `ai_query_history` |
+
+## 2.2 Design Patterns Used
+
+| Pattern | Implementation | Purpose |
+|---------|---------------|---------|
+| **Repository Pattern** | Spring Data JPA/MongoDB | Data access abstraction |
+| **DTO Pattern** | `*DTO` classes | Decouple entities from API |
+| **AOP (Aspect)** | `PremiumFeatureAspect` | Cross-cutting subscription checks |
+| **Builder Pattern** | Lombok `@Builder` | Immutable object creation |
+| **Circuit Breaker** | `GeminiService` | AI API resilience |
+| **Rate Limiting** | `GeminiService` + Redis | API call protection |
+| **Strategy Pattern** | `CsvParserService` | Multi-bank CSV parsing |
+
+## 2.3 Scalability & Modularity
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    SCALABILITY FEATURES                          │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐ │
+│  │   Redis Cache   │  │  Stateless JWT  │  │ Async Scheduled │ │
+│  │                 │  │                 │  │     Jobs        │ │
+│  │ • Dashboard: 5m │  │ • No session    │  │                 │ │
+│  │ • Analytics:10m │  │   storage       │  │ • Data cleanup  │ │
+│  │ • AI Tips: 6h   │  │ • Horizontal    │  │ • Budget alerts │ │
+│  │ • Subscription  │  │   scaling ready │  │ • Reminders     │ │
+│  │   status: 1h    │  │                 │  │                 │ │
+│  └─────────────────┘  └─────────────────┘  └─────────────────┘ │
+│                                                                  │
+│  ┌─────────────────────────────────────────────────────────────┐│
+│  │                  MODULAR ARCHITECTURE                        ││
+│  │                                                              ││
+│  │  • Each controller handles single domain                    ││
+│  │  • Services are loosely coupled via interfaces              ││
+│  │  • MongoDB is optional (AI features graceful degradation)   ││
+│  │  • Feature flags via subscription tiers                     ││
+│  │  • Database-per-concern (PostgreSQL vs MongoDB vs Redis)    ││
+│  └─────────────────────────────────────────────────────────────┘│
+└─────────────────────────────────────────────────────────────────┘
+```
+
+
+---
+
+# 3. Authentication & Security
+
+## 3.1 Authentication Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         REGISTRATION FLOW                                │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  User ──POST /register──▶ ProfileService ──▶ Save to DB (inactive)      │
+│                                    │                                     │
+│                                    ▼                                     │
+│                          Generate activation token                       │
+│                                    │                                     │
+│                                    ▼                                     │
+│                          Send activation email                           │
+│                                    │                                     │
+│  User ──GET /activate/{token}──▶ Activate account                       │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│                            LOGIN FLOW                                    │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  User ──POST /login──▶ AuthenticationManager                            │
+│         (email,         │                                                │
+│          password)      ▼                                                │
+│                   Validate credentials                                   │
+│                         │                                                │
+│               ┌─────────┴─────────┐                                     │
+│               ▼                   ▼                                     │
+│          ✓ Valid              ✗ Invalid                                 │
+│               │                   │                                     │
+│               ▼                   ▼                                     │
+│        Generate JWT          Return 401                                 │
+│               │                                                          │
+│               ▼                                                          │
+│        Return { token, user }                                           │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+
+## 3.2 JWT Token Structure
+
+```
+Header:
+{
+  "alg": "HS256",
+  "typ": "JWT"
+}
+
+Payload:
+{
+  "sub": "user@email.com",    // User email (subject)
+  "iat": 1713456789,          // Issued at timestamp
+  "exp": 1713543189           // Expiration timestamp
+}
+
+Signature:
+HMACSHA256(base64(header) + "." + base64(payload), SECRET_KEY)
+```
+
+
+## 3.3 Request Authorization
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                       JwtRequestFilter Flow                              │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  Request with Authorization header                                       │
+│         │                                                                │
+│         ▼                                                                │
+│  ┌──────────────────┐                                                   │
+│  │ Extract "Bearer" │                                                   │
+│  │     token        │                                                   │
+│  └────────┬─────────┘                                                   │
+│           │                                                              │
+│           ▼                                                              │
+│  ┌──────────────────┐    ┌─────────────┐                               │
+│  │  Parse JWT with  │───▶│ SignatureEx │──▶ Log error, continue        │
+│  │   secret key     │    │ ExpiredJwt  │     unauthenticated           │
+│  └────────┬─────────┘    │ MalformedJwt│                               │
+│           │              └─────────────┘                                │
+│           ▼ Valid                                                        │
+│  ┌──────────────────┐                                                   │
+│  │ Load UserDetails │                                                   │
+│  │   by email       │                                                   │
+│  └────────┬─────────┘                                                   │
+│           │                                                              │
+│           ▼                                                              │
+│  ┌──────────────────┐                                                   │
+│  │ Set Security     │                                                   │
+│  │ Context Auth     │                                                   │
+│  └────────┬─────────┘                                                   │
+│           │                                                              │
+│           ▼                                                              │
+│  Continue to Controller                                                  │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+
+## 3.4 Public vs Protected Endpoints
+
+| Endpoint Pattern | Auth Required | Description |
+|-----------------|---------------|-------------|
+| `POST /register` | ❌ No | User registration |
+| `GET /activate/**` | ❌ No | Account activation |
+| `POST /resend-activation` | ❌ No | Resend activation email |
+| `POST /login` | ❌ No | User login |
+| `GET /status`, `/health` | ❌ No | Health check |
+| `GET /actuator/**` | ❌ No | Spring Actuator |
+| `POST /forgot-password` | ❌ No | Password reset request |
+| `POST /reset-password` | ❌ No | Password reset |
+| `GET /validate-reset-token` | ❌ No | Validate reset token |
+| `GET /api/subscription/plans` | ❌ No | List pricing plans |
+| **All other endpoints** | ✅ Yes | Requires valid JWT |
+
+## 3.5 Subscription-Based Access Control
+
+```
+@PremiumFeature Annotation Flow
+───────────────────────────────
+
+Controller Method with @PremiumFeature
+         │
+         ▼
+┌─────────────────────────────┐
+│  PremiumFeatureAspect       │
+│  (Around advice)            │
+└──────────┬──────────────────┘
+           │
+           ▼
+┌─────────────────────────────┐
+│  subscriptionService        │
+│  .hasAccess(requiredPlans)  │
+└──────────┬──────────────────┘
+           │
+     ┌─────┴─────┐
+     │           │
+     ▼           ▼
+  Access      Access
+  Granted     Denied
+     │           │
+     ▼           ▼
+  Proceed    Throw 403
+  to method  Forbidden
+```
+
+
+**Plan Feature Matrix:**
+
+| Feature | FREE | BASIC | PREMIUM |
+|---------|------|-------|---------|
+| Expense/Income tracking | ✅ | ✅ | ✅ |
+| Categories | 5 max | Unlimited | Unlimited |
+| AI Queries/month | 0 | 5 | 50 |
+| CSV Bank Import/month | 0 | 3 | Unlimited |
+| Data Retention | 3 months | 12 months | Unlimited |
+| Spending Predictions | ❌ | ✅ | ✅ |
+| Anomaly Detection | ❌ | ✅ | ✅ |
+| AI Savings Strategy | ❌ | ❌ | ✅ |
+
+## 3.6 Security Best Practices Implemented
+
+| Practice | Implementation |
+|----------|---------------|
+| Password Hashing | BCrypt (strength factor default) |
+| Stateless Auth | JWT tokens, no server sessions |
+| CORS Configuration | Whitelist specific origins |
+| CSRF Protection | Disabled (stateless API) |
+| Token Expiration | Configurable via `jwt.expiration` |
+| Rate Limiting | Gemini API calls limited |
+| Input Validation | DTO validation + service checks |
+| SQL Injection | Spring Data JPA parameterized queries |
+
+---
+
+# 4. API Endpoints
+
+## 4.1 Authentication Endpoints
+
+### POST /register
+**Creates a new user account**
+
+```
+Request:
+{
+  "fullname": "John Doe",
+  "email": "john@example.com",
+  "password": "securePassword123"
+}
+
+Response (201 Created):
+{
+  "id": 1,
+  "fullname": "John Doe",
+  "email": "john@example.com",
+  "profileImageUrl": null,
+  "createdAt": "2026-04-18T10:30:00",
+  "updatedAt": "2026-04-18T10:30:00"
+}
+
+Validation Rules:
+- email: Required, valid email format, unique
+- password: Required, min 8 characters recommended
+- fullname: Required
+
+Internal Flow:
+1. Check if email already exists → throw if duplicate
+2. Hash password with BCrypt
+3. Generate UUID activation token
+4. Save profile with isActive=false
+5. Send activation email asynchronously
+6. Return profile DTO (without password)
+```
+
+
+### POST /login
+**Authenticates user and returns JWT**
+
+```
+Request:
+{
+  "email": "john@example.com",
+  "password": "securePassword123"
+}
+
+Response (200 OK):
+{
+  "token": "eyJhbGciOiJIUzI1NiJ9...",
+  "user": {
+    "id": 1,
+    "fullname": "John Doe",
+    "email": "john@example.com",
+    "profileImageUrl": "https://cloudinary.com/...",
+    "createdAt": "2026-04-18T10:30:00",
+    "updatedAt": "2026-04-18T10:30:00"
+  }
+}
+
+Response (401 Unauthorized):
+{
+  "message": "Invalid email or password"
+}
+
+Response (403 Forbidden):
+{
+  "message": "Account is not activated."
+}
+
+Status Codes:
+- 200: Success
+- 401: Invalid credentials
+- 403: Account not activated
+
+Internal Flow:
+1. Check if account has pending deletion → cancel deletion if login succeeds
+2. Authenticate via AuthenticationManager
+3. Check if account is active
+4. Generate JWT token with email as subject
+5. Return token + user profile
+```
+
+
+### GET /activate/{token}
+**Activates a user account**
+
+```
+Response (200 OK):
+"Profile activated successfully"
+
+Response (404 Not Found):
+"Activation token NOT FOUND or ALREADY USED"
+
+Internal Flow:
+1. Find profile by activation token
+2. Set isActive = true
+3. Clear activation token (prevent reuse)
+4. Save profile
+```
+
+
+### POST /forgot-password
+**Initiates password reset**
+
+```
+Request:
+{
+  "email": "john@example.com"
+}
+
+Response (200 OK):
+{
+  "success": true,
+  "message": "If an account with that email exists, we've sent a password reset link."
+}
+
+Note: Always returns success to prevent email enumeration
+
+Internal Flow:
+1. Find profile by email (silently continue if not found)
+2. Generate UUID reset token
+3. Set token expiry (1 hour)
+4. Send reset email with link
+```
+
+
+### POST /reset-password
+**Resets password using token**
+
+```
+Request:
+{
+  "token": "uuid-reset-token",
+  "newPassword": "newSecurePassword123"
+}
+
+Response (200 OK):
+{
+  "success": true,
+  "message": "Password has been reset successfully."
+}
+
+Response (400 Bad Request):
+{
+  "success": false,
+  "message": "Invalid or expired reset token"
+}
+
+Validation:
+- newPassword: Min 8 characters
+- Token must be valid and not expired
+```
+
+
+---
+
+## 4.2 Expense Endpoints
+
+### POST /expences
+**Creates a new expense**
+
+```
+Request:
+{
+  "name": "Grocery Shopping",
+  "amount": 1500.00,
+  "date": "2026-04-18",
+  "categoryId": 5,
+  "icon": "🛒"
+}
+
+Response (201 Created):
+{
+  "id": 42,
+  "name": "Grocery Shopping",
+  "icon": "🛒",
+  "categoryName": "Groceries",
+  "categoryId": 5,
+  "amount": 1500.00,
+  "date": "2026-04-18",
+  "createdAt": "2026-04-18T14:30:00",
+  "updatedAt": "2026-04-18T14:30:00"
+}
+
+Validation:
+- name: Required
+- amount: Required, positive number
+- categoryId: Required, must exist for user
+- date: Optional (defaults to today)
+
+Internal Flow:
+1. Get current user profile
+2. Validate category exists and belongs to user
+3. Create expense entity
+4. Save to database
+5. Check budget status → log warning if near/over limit
+6. Return expense DTO
+```
+
+
+### GET /expences
+**Gets current month expenses**
+
+```
+Response (200 OK):
+[
+  {
+    "id": 42,
+    "name": "Grocery Shopping",
+    "icon": "🛒",
+    "categoryName": "Groceries",
+    "categoryId": 5,
+    "amount": 1500.00,
+    "date": "2026-04-18",
+    "createdAt": "2026-04-18T14:30:00",
+    "updatedAt": "2026-04-18T14:30:00"
+  }
+]
+
+Internal Flow:
+1. Get current user profile
+2. Calculate current month date range (1st to last day)
+3. Query expenses within range
+4. Map to DTOs and return
+```
+
+
+### GET /expences/all
+**Gets all expenses ordered by date (newest first)**
+
+```
+Response: Same structure as GET /expences but all-time data
+```
+
+
+### DELETE /expences/{id}
+**Deletes an expense**
+
+```
+Response (204 No Content): Success
+
+Response (404): Expense not found
+
+Internal Flow:
+1. Find expense by ID
+2. Verify ownership (belongs to current user)
+3. Delete expense
+```
+
+
+---
+
+## 4.3 Income Endpoints
+
+### POST /incomes
+**Creates a new income**
+
+```
+Request:
+{
+  "name": "Monthly Salary",
+  "amount": 50000.00,
+  "date": "2026-04-01",
+  "categoryId": 2,
+  "icon": "💰"
+}
+
+Response (201 Created):
+{
+  "id": 15,
+  "name": "Monthly Salary",
+  "icon": "💰",
+  "categoryName": "Salary",
+  "categoryId": 2,
+  "amount": 50000.00,
+  "date": "2026-04-01",
+  "createdAt": "2026-04-01T09:00:00",
+  "updatedAt": "2026-04-01T09:00:00"
+}
+```
+
+
+### GET /incomes
+**Gets current month incomes**
+
+### GET /incomes/all
+**Gets all incomes**
+
+### DELETE /incomes/{id}
+**Deletes an income**
+
+---
+
+## 4.4 Category Endpoints
+
+### POST /categories
+**Creates a new category**
+
+```
+Request:
+{
+  "name": "Entertainment",
+  "icon": "🎬",
+  "type": "expence"  // or "income"
+}
+
+Response (201 Created):
+{
+  "id": 10,
+  "profileId": 1,
+  "name": "Entertainment",
+  "icon": "🎬",
+  "type": "expence",
+  "createdAt": "2026-04-18T10:00:00",
+  "updatedAt": "2026-04-18T10:00:00"
+}
+
+Validation:
+- name: Required, unique per user
+- type: Required, "income" or "expence"
+```
+
+
+### GET /categories
+**Gets all categories for current user**
+
+### GET /categories/{type}
+**Gets categories by type**
+
+```
+GET /categories/income → Returns income categories
+GET /categories/expence → Returns expense categories
+```
+
+
+### PUT /categories/{categoryId}
+**Updates a category**
+
+### DELETE /categories/{categoryId}
+**Deletes a category**
+
+---
+
+## 4.5 Dashboard Endpoint
+
+### GET /dashboard
+**Gets comprehensive dashboard data**
+
+```
+Response (200 OK):
+{
+  "totalBalance": 35000.00,
+  "balance": 35000.00,
+  "totalIncome": 50000.00,
+  "totalExpense": 15000.00,
+  "totalExpence": 15000.00,
+  "recentExpenses": [...],
+  "recentIncomes": [...],
+  "recentTransactions": [
+    {
+      "id": 42,
+      "profileId": 1,
+      "name": "Grocery Shopping",
+      "icon": "🛒",
+      "type": "expence",
+      "amount": 1500.00,
+      "date": "2026-04-18",
+      "createdAt": "2026-04-18T14:30:00"
+    }
+  ],
+  "categoryBreakdown": {
+    "Groceries": 3000.00,
+    "Transportation": 2000.00,
+    "Food & Dining": 5000.00
+  }
+}
+
+Internal Flow:
+1. Fetch latest 5 incomes and expenses
+2. Merge and sort by date
+3. Calculate current month totals
+4. Build category breakdown map
+5. Return aggregated data
+```
+
+
+---
+
+## 4.6 Analytics Endpoints
+
+### GET /api/analytics/weekly
+**Gets last 7 days analytics**
+
+```
+Response (200 OK):
+{
+  "dailySpending": [
+    { "date": "2026-04-12", "amount": 500.00 },
+    { "date": "2026-04-13", "amount": 1200.00 },
+    ...
+  ],
+  "dailyIncome": [...],
+  "categoryBreakdown": {
+    "Food & Dining": 3500.00,
+    "Transportation": 1200.00
+  },
+  "monthlyTrends": [...],
+  "totalIncome": 10000.00,
+  "totalExpense": 8500.00,
+  "netSavings": 1500.00,
+  "averageDailySpending": 1214.29,
+  "highestSpendingDay": 2500.00,
+  "topSpendingCategory": "Food & Dining",
+  "savingsRate": 15.0
+}
+```
+
+
+### GET /api/analytics/monthly
+**Gets current month analytics**
+
+### GET /api/analytics/6months
+**Gets last 6 months trends**
+
+### GET /api/analytics/yearly
+**Gets year-to-date analytics**
+
+### GET /api/analytics/custom
+**Gets custom date range analytics**
+
+```
+Query Parameters:
+- startDate: yyyy-MM-dd (required)
+- endDate: yyyy-MM-dd (required)
+
+Example: /api/analytics/custom?startDate=2026-01-01&endDate=2026-03-31
+
+Validation:
+- startDate must be before endDate
+- Maximum range: 365 days
+```
+
+
+---
+
+## 4.7 Budget Endpoints
+
+### GET /api/budgets
+**Gets all budget goals for current month with progress**
+
+```
+Response (200 OK):
+[
+  {
+    "id": 1,
+    "categoryId": 5,
+    "categoryName": "Food & Dining",
+    "month": 4,
+    "year": 2026,
+    "budgetAmount": 10000.00,
+    "spentAmount": 7500.00,
+    "remainingAmount": 2500.00,
+    "percentageUsed": 75.0,
+    "alertThreshold": 80,
+    "isOverBudget": false,
+    "isNearLimit": false,
+    "isRecurring": true
+  },
+  {
+    "id": 2,
+    "categoryId": null,
+    "categoryName": "Overall",
+    "month": 4,
+    "year": 2026,
+    "budgetAmount": 30000.00,
+    "spentAmount": 15000.00,
+    "remainingAmount": 15000.00,
+    "percentageUsed": 50.0,
+    "alertThreshold": 80,
+    "isOverBudget": false,
+    "isNearLimit": false,
+    "isRecurring": true
+  }
+]
+```
+
+
+### POST /api/budgets
+**Creates or updates a budget goal**
+
+```
+Request:
+{
+  "categoryId": 5,      // null or 0 for overall budget
+  "amount": 10000,
+  "alertThreshold": 80, // Alert at 80% (default)
+  "isRecurring": true   // Copy to next month
+}
+
+Response (200 OK):
+{
+  "id": 1,
+  "categoryId": 5,
+  "categoryName": "Food & Dining",
+  ...
+}
+```
+
+
+### GET /api/budgets/category/{categoryId}
+**Gets budget for specific category**
+
+### GET /api/budgets/overall
+**Gets overall budget (not category-specific)**
+
+### DELETE /api/budgets/{id}
+**Deletes a budget goal**
+
+---
+
+## 4.8 Recurring Transaction Endpoints
+
+### GET /api/recurring
+**Gets all active recurring transactions**
+
+```
+Response (200 OK):
+[
+  {
+    "id": 1,
+    "name": "House Rent",
+    "amount": 15000.00,
+    "type": "EXPENSE",
+    "categoryId": 8,
+    "categoryName": "Rent & Housing",
+    "icon": "🏠",
+    "frequency": "MONTHLY",
+    "dayOfPeriod": 1,
+    "startDate": "2026-01-01",
+    "endDate": null,
+    "nextExecution": "2026-05-01",
+    "lastExecuted": "2026-04-01",
+    "isActive": true,
+    "sendReminder": true,
+    "reminderDaysBefore": 1
+  }
+]
+```
+
+
+### POST /api/recurring
+**Creates a recurring transaction**
+
+```
+Request:
+{
+  "name": "Netflix Subscription",
+  "amount": 649.00,
+  "type": "EXPENSE",
+  "categoryId": 10,
+  "icon": "📺",
+  "frequency": "MONTHLY",     // DAILY, WEEKLY, MONTHLY, YEARLY
+  "dayOfPeriod": 15,          // Day of month (1-31)
+  "startDate": "2026-04-15",
+  "endDate": null,            // null = no end
+  "sendReminder": true,
+  "reminderDaysBefore": 1
+}
+
+Frequency Options:
+- DAILY: Runs every day (can exclude weekdays)
+- WEEKLY: Runs on specific weekday(s)
+- MONTHLY: Runs on specific day of month
+- YEARLY: Runs on anniversary of startDate
+```
+
+
+### PUT /api/recurring/{id}
+**Updates a recurring transaction**
+
+### DELETE /api/recurring/{id}
+**Deactivates a recurring transaction**
+
+---
+
+## 4.9 AI Endpoints
+
+### POST /api/ai/analyze-spending
+**Analyzes spending patterns using AI** [BASIC+]
+
+```
+Response (200 OK):
+{
+  "analysis": "Based on your spending data, here are the key insights:\n\n1. Your top spending category is Food & Dining...",
+  "totalIncome": 50000.00,
+  "totalExpense": 35000.00,
+  "categoryBreakdown": {
+    "Food & Dining": 12000.00,
+    "Transportation": 5000.00
+  },
+  "savingsRate": 30.0,
+  "potentialSavings": 3500.00,
+  "priority": "MEDIUM",
+  "analyzedAt": "2026-04-18T10:30:00"
+}
+
+Internal Flow:
+1. Check AI query limit for user's plan
+2. Gather financial data from dashboard service
+3. Build AI prompt with spending context
+4. Call Gemini API
+5. Save query to MongoDB history
+6. Save insight for later retrieval
+7. Return analysis with metadata
+```
+
+
+### POST /api/ai/savings-strategy
+**Gets personalized savings strategy** [PREMIUM only]
+
+```
+Response (200 OK):
+{
+  "strategy": "Based on your financial profile, here's your personalized savings plan...",
+  "currentSavings": 15000.00,
+  "targetSavings": 10000.00,
+  "savingsRate": 30.0,
+  "potentialSavings": 5000.00,
+  "priority": "LOW",
+  "generatedAt": "2026-04-18T10:30:00"
+}
+```
+
+
+### GET /api/ai/financial-health
+**Gets financial health score** [BASIC+]
+
+```
+Query Parameters:
+- refresh: boolean (optional, default false)
+
+Response (200 OK):
+{
+  "analysis": "Your financial health assessment...",
+  "healthScore": 72,
+  "healthStatus": "GOOD",
+  "savingsRate": 30.0,
+  "priority": "LOW",
+  "calculatedAt": "2026-04-18T10:30:00",
+  "cached": true  // Indicates if result was from cache
+}
+
+Health Score Breakdown:
+- 80-100: EXCELLENT
+- 60-79: GOOD
+- 40-59: FAIR
+- 20-39: POOR
+- 0-19: CRITICAL
+```
+
+
+### POST /api/ai/ask
+**Asks a financial question to AI** [BASIC+]
+
+```
+Request:
+{
+  "question": "How can I save money on groceries?"
+}
+
+Response (200 OK):
+{
+  "question": "How can I save money on groceries?",
+  "answer": "Based on your spending pattern, here are tips to save on groceries...",
+  "answeredAt": "2026-04-18T10:35:00"
+}
+```
+
+
+### GET /api/ai/insights
+**Gets stored AI insights** [BASIC+]
+
+```
+Query Parameters:
+- priority: HIGH, MEDIUM, LOW (optional)
+- type: SPENDING_ANALYSIS, SAVINGS_STRATEGY, FINANCIAL_HEALTH (optional)
+
+Response (200 OK):
+[
+  {
+    "id": "507f1f77bcf86cd799439011",
+    "profileId": 1,
+    "insightType": "SPENDING_ANALYSIS",
+    "title": "Spending Analysis - 2026-04-18",
+    "description": "Your top spending category...",
+    "priority": "MEDIUM",
+    "potentialSavings": 3500.00,
+    "isRead": false,
+    "isActionTaken": false,
+    "createdAt": "2026-04-18T10:30:00"
+  }
+]
+```
+
+
+### GET /api/ai/remaining-queries
+**Gets remaining AI queries for month**
+
+```
+Response (200 OK):
+{
+  "used": 3,
+  "limit": 5,
+  "remaining": 2
+}
+```
+
+
+---
+
+## 4.10 Smart Insights Endpoints
+
+### GET /api/insights/predictions
+**Gets next month spending predictions** [BASIC+]
+
+```
+Response (200 OK):
+{
+  "predictedTotal": 32500.00,
+  "categoryPredictions": {
+    "Food & Dining": 11000.00,
+    "Transportation": 4500.00,
+    "Utilities": 3000.00
+  },
+  "basedOnMonths": 3,
+  "confidence": "HIGH",
+  "nextMonth": "2026-05",
+  "generatedAt": "2026-04-18"
+}
+
+Confidence Levels:
+- HIGH: Spending variance < 20%
+- MEDIUM: Spending variance 20-40%
+- LOW: Spending variance > 40% or insufficient data
+```
+
+
+### GET /api/insights/anomalies
+**Gets spending anomalies** [BASIC+]
+
+```
+Response (200 OK):
+[
+  {
+    "transactionId": 42,
+    "name": "Expensive Dinner",
+    "amount": 5000.00,
+    "category": "Food & Dining",
+    "date": "2026-04-15",
+    "categoryAverage": 800.00,
+    "percentageAboveAverage": 525.0,
+    "severity": "HIGH",
+    "reason": "Significantly higher than usual"
+  }
+]
+
+Detection Method:
+- Flags transactions > 2 standard deviations from category mean
+- Based on last 3 months historical data
+- Only checks transactions from last 7 days
+```
+
+
+### GET /api/insights/tips
+**Gets AI-generated saving tips** [BASIC+]
+
+```
+Response (200 OK):
+{
+  "tips": "1. Cut Food & Dining by ₹2000...\n2. ...\n3. ...",
+  "basedOnSpending": 35000.00,
+  "topCategory": "Food & Dining",
+  "topCategorySpending": 12000.00,
+  "daysAnalyzed": 18,
+  "generatedAt": "2026-04-18"
+}
+
+Note: This counts towards monthly AI query limit
+```
+
+
+### GET /api/insights/summary
+**Gets spending summary (no AI)**
+
+```
+Response (200 OK):
+{
+  "currentMonthSpending": 25000.00,
+  "lastMonthSpending": 30000.00,
+  "dailyAverage": 1388.89,
+  "projectedMonthTotal": 41667.00,
+  "comparedToLastMonth": 5000.00,
+  "trend": "DOWN",
+  "daysPassed": 18,
+  "daysRemaining": 12
+}
+```
+
+
+---
+
+## 4.11 Subscription Endpoints
+
+### GET /api/subscription/plans
+**Gets all available plans** (Public)
+
+```
+Response (200 OK):
+[
+  {
+    "id": 1,
+    "name": "FREE",
+    "description": "Free Plan - Basic Features",
+    "monthlyPrice": 0,
+    "yearlyPrice": 0,
+    "maxCategories": 5,
+    "maxBankImports": 0,
+    "aiQueriesPerMonth": 0,
+    "dataRetentionMonths": 3
+  },
+  {
+    "id": 2,
+    "name": "BASIC",
+    "description": "Basic Plan - Essential Features",
+    "monthlyPrice": 99.00,
+    "yearlyPrice": 999.00,
+    "maxCategories": 999,
+    "maxBankImports": 3,
+    "aiQueriesPerMonth": 5,
+    "dataRetentionMonths": 12
+  },
+  {
+    "id": 3,
+    "name": "PREMIUM",
+    "description": "Premium Plan - All Features Unlocked",
+    "monthlyPrice": 299.00,
+    "yearlyPrice": 2999.00,
+    "maxCategories": 999,
+    "maxBankImports": 999,
+    "aiQueriesPerMonth": 50,
+    "dataRetentionMonths": 0
+  }
+]
+```
+
+
+### GET /api/subscription/current
+**Gets current user's subscription**
+
+```
+Response (200 OK):
+{
+  "id": 5,
+  "planType": "BASIC",
+  "planName": "Basic Plan - Essential Features",
+  "startDate": "2026-04-01",
+  "endDate": "2026-05-01",
+  "status": "ACTIVE",
+  "autoRenew": true,
+  "daysRemaining": 13,
+  "aiQueriesUsed": 3,
+  "aiQueriesLimit": 5,
+  "csvImportsUsed": 1,
+  "csvImportsLimit": 3
+}
+
+Status Values:
+- ACTIVE: Currently valid
+- GRACE_PERIOD: Expired, 3 days to renew
+- EXPIRED: Fully expired
+- CANCELLED: User cancelled
+- UPGRADED: Replaced by new subscription
+```
+
+
+### POST /api/subscription/cancel
+**Cancels subscription**
+
+```
+Query Parameter: subscriptionId=5
+
+Response (200 OK):
+{
+  "success": true,
+  "message": "Subscription cancelled. You can continue using premium features until the end date."
+}
+```
+
+
+### GET /api/subscription/data-retention
+**Gets data retention info**
+
+```
+Response (200 OK):
+{
+  "retentionMonths": 12,
+  "isUnlimited": false,
+  "nextCleanupCutoffDate": "2025-04-18",
+  "recordsToBeDeleted": 150,
+  "message": "Data older than 12 months will be automatically deleted."
+}
+```
+
+
+---
+
+## 4.12 Payment Endpoints
+
+### POST /api/payments/create-order
+**Creates Razorpay order**
+
+```
+Request:
+{
+  "planName": "BASIC",
+  "billingCycle": "MONTHLY"  // or "YEARLY"
+}
+
+Response (200 OK):
+{
+  "orderId": "order_NxYz123abc",
+  "amount": 99.00,
+  "currency": "INR",
+  "razorpayKeyId": "rzp_test_xxxxx",
+  "planName": "BASIC",
+  "billingCycle": "MONTHLY"
+}
+
+Internal Flow:
+1. Get plan by name
+2. Validate not FREE plan
+3. Calculate amount (monthly vs yearly)
+4. Create Razorpay order via API
+5. Save pending payment record
+6. Return order details for frontend
+```
+
+
+### POST /api/payments/verify
+**Verifies payment after Razorpay callback**
+
+```
+Request:
+{
+  "razorpayOrderId": "order_NxYz123abc",
+  "razorpayPaymentId": "pay_AbC123xyz",
+  "razorpaySignature": "signature_hash"
+}
+
+Response (200 OK):
+{
+  "success": true,
+  "message": "Payment verified and subscription activated successfully!"
+}
+
+Response (400 Bad Request):
+{
+  "success": false,
+  "message": "Payment verification failed. Please contact support."
+}
+
+Internal Flow:
+1. Get payment record by order ID
+2. Extract plan info from stored metadata
+3. Verify Razorpay signature using HMAC
+4. Update payment status to SUCCESS
+5. Activate subscription for user
+6. Return success/failure
+```
+
+
+### GET /api/payments/history
+**Gets payment history**
+
+```
+Response (200 OK):
+[
+  {
+    "id": 1,
+    "profileId": 1,
+    "subscriptionId": 5,
+    "razorpayOrderId": "order_NxYz123abc",
+    "razorpayPaymentId": "pay_AbC123xyz",
+    "amount": 99.00,
+    "currency": "INR",
+    "status": "SUCCESS",
+    "paymentMethod": "UPI",
+    "createdAt": "2026-04-01T10:00:00"
+  }
+]
+```
+
+
+---
+
+## 4.13 Bank Import Endpoints
+
+### POST /api/bank/import
+**Imports transactions from CSV** [BASIC+]
+
+```
+Request: multipart/form-data
+- file: CSV file
+- bankName: SBI, HDFC, ICICI, AXIS, KOTAK, or GENERIC
+
+Response (200 OK):
+{
+  "success": true,
+  "totalImported": 45,
+  "credits": 5,
+  "debits": 40,
+  "message": "Successfully imported 45 transactions (5 credits, 40 debits)"
+}
+
+Supported Banks:
+- SBI (State Bank of India)
+- HDFC Bank
+- ICICI Bank
+- AXIS Bank
+- KOTAK Mahindra Bank
+- GENERIC (auto-detect columns)
+
+Internal Flow:
+1. Check import limit for plan
+2. Validate file is CSV
+3. Parse CSV, detect header row
+4. Auto-detect column positions
+5. Parse each row, extract transaction data
+6. Auto-categorize using merchant patterns
+7. Save all transactions
+8. Return import summary
+```
+
+
+### GET /api/bank/transactions
+**Gets imported bank transactions with pagination**
+
+```
+Query Parameters:
+- page: Page number (0-indexed)
+- size: Page size (default 20)
+- sort: Sort field,direction (e.g., transactionDate,desc)
+
+Response (200 OK):
+{
+  "content": [
+    {
+      "id": 1,
+      "bankName": "HDFC",
+      "transactionDate": "2026-04-15",
+      "description": "UPI/123456/SWIGGY/PAYMENT",
+      "referenceNumber": "123456789",
+      "amount": 350.00,
+      "type": "DEBIT",
+      "balance": 45000.00,
+      "categoryId": null,
+      "categoryName": null,
+      "suggestedCategory": "Food & Dining",
+      "merchantName": "SWIGGY",
+      "isConverted": false
+    }
+  ],
+  "totalElements": 45,
+  "totalPages": 3,
+  "number": 0
+}
+```
+
+
+### POST /api/bank/transactions/{id}/categorize
+**Categorizes and converts to expense/income**
+
+```
+Query Parameter: categoryId=5
+
+Response (200 OK):
+{
+  "id": 1,
+  "bankName": "HDFC",
+  ...
+  "categoryId": 5,
+  "categoryName": "Food & Dining",
+  "isConverted": true
+}
+
+Internal Flow:
+1. Get transaction by ID
+2. Verify ownership
+3. Set category
+4. Create expense (DEBIT) or income (CREDIT) record
+5. Mark transaction as converted
+6. Return updated transaction
+```
+
+
+---
+
+## 4.14 Totals Endpoint
+
+### GET /api/totals
+**Gets income/expense totals**
+
+```
+Query Parameter: period=MONTH (default) or ALL_TIME
+
+Response (200 OK):
+{
+  "totalIncome": 50000.00,
+  "totalExpense": 35000.00,
+  "balance": 15000.00,
+  "savingsRate": 30.0,
+  "period": "MONTH"
+}
+```
+
+
+---
+
+## 4.15 Filter Endpoint
+
+### POST /filter
+**Filters transactions by criteria**
+
+```
+Request:
+{
+  "type": "expence",           // or "income"
+  "startDate": "2026-01-01",
+  "endDate": "2026-04-18",
+  "keyword": "grocery",
+  "sortField": "date",         // date, amount, name
+  "sortOrder": "desc"          // asc or desc
+}
+
+Response (200 OK):
+[
+  {
+    "id": 42,
+    "name": "Grocery Shopping",
+    "amount": 1500.00,
+    ...
+  }
+]
+```
+
+
+---
+
+# 5. Database Design
+
+## 5.1 Entity Relationship Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           POSTGRESQL SCHEMA                                  │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+                              ┌──────────────────┐
+                              │  tbl_profiles    │
+                              │──────────────────│
+                              │ PK: id           │
+                              │ email (unique)   │
+                              │ password (hash)  │
+                              │ fullname         │
+                              │ profileImageUrl  │
+                              │ isActive         │
+                              │ activationToken  │
+                              │ deletionFields...│
+                              │ resetFields...   │
+                              └────────┬─────────┘
+                                       │
+           ┌───────────────────────────┼───────────────────────────┐
+           │                           │                           │
+           ▼                           ▼                           ▼
+┌──────────────────┐     ┌──────────────────┐     ┌──────────────────┐
+│  tbl_category    │     │  tbl_expences    │     │   tbl_incomes    │
+│──────────────────│     │──────────────────│     │──────────────────│
+│ PK: id           │     │ PK: id           │     │ PK: id           │
+│ FK: profile_id   │◄────│ FK: profile_id   │     │ FK: profile_id   │
+│ name             │     │ FK: category_id ─┼────▶│ FK: category_id  │
+│ icon             │     │ name             │     │ name             │
+│ type (income/    │     │ icon             │     │ icon             │
+│       expence)   │     │ amount           │     │ amount           │
+└──────────────────┘     │ date             │     │ date             │
+         │               └──────────────────┘     └──────────────────┘
+         │
+         ▼
+┌──────────────────┐     ┌──────────────────────┐   ┌────────────────────┐
+│ tbl_budget_goals │     │ tbl_recurring_trans  │   │ tbl_bank_trans     │
+│──────────────────│     │──────────────────────│   │────────────────────│
+│ PK: id           │     │ PK: id               │   │ PK: id             │
+│ FK: profile_id   │     │ FK: profile_id       │   │ FK: profile_id     │
+│ FK: category_id  │     │ FK: category_id      │   │ FK: category_id    │
+│ month, year      │     │ name, amount, type   │   │ bankName           │
+│ budgetAmount     │     │ frequency            │   │ transactionDate    │
+│ alertThreshold   │     │ dayOfPeriod          │   │ description        │
+│ isRecurring      │     │ startDate, endDate   │   │ amount, type       │
+└──────────────────┘     │ nextExecution        │   │ suggestedCategory  │
+                         │ sendReminder         │   │ isConverted        │
+                         └──────────────────────┘   └────────────────────┘
+
+┌──────────────────────┐     ┌──────────────────────┐
+│ tbl_subscriptions    │     │ tbl_subscription_    │
+│──────────────────────│     │        plans         │
+│ PK: id               │     │──────────────────────│
+│ FK: profile_id       │     │ PK: id               │
+│ FK: plan_id ─────────┼────▶│ name (FREE/BASIC/    │
+│ planType             │     │       PREMIUM)       │
+│ startDate, endDate   │     │ monthlyPrice         │
+│ status               │     │ yearlyPrice          │
+│ autoRenew            │     │ maxCategories        │
+└──────────────────────┘     │ aiQueriesPerMonth    │
+                             │ dataRetentionMonths  │
+                             └──────────────────────┘
+
+┌──────────────────────┐
+│ tbl_payment_history  │
+│──────────────────────│
+│ PK: id               │
+│ FK: profile_id       │
+│ FK: subscription_id  │
+│ razorpayOrderId      │
+│ razorpayPaymentId    │
+│ amount, currency     │
+│ status               │
+└──────────────────────┘
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            MONGODB SCHEMA                                    │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────┐     ┌──────────────────────────┐
+│    ai_insights           │     │    ai_query_history      │
+│──────────────────────────│     │──────────────────────────│
+│ _id: ObjectId            │     │ _id: ObjectId            │
+│ profileId: Long          │     │ profileId: Long          │
+│ insightType              │     │ queryType                │
+│ title                    │     │ userQuery                │
+│ description              │     │ aiResponse               │
+│ data: Map                │     │ context: Map             │
+│ priority                 │     │ tokensUsed               │
+│ potentialSavings         │     │ responseTimeMs           │
+│ isRead, isActionTaken    │     │ model                    │
+│ createdAt                │     │ createdAt                │
+│ expiresAt (TTL: 7d)      │     │                          │
+└──────────────────────────┘     └──────────────────────────┘
+```
+
+
+## 5.2 Table Definitions
+
+### tbl_profiles
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| id | BIGSERIAL | PRIMARY KEY | Auto-increment ID |
+| email | VARCHAR(255) | UNIQUE, NOT NULL | User email |
+| password | VARCHAR(255) | NOT NULL | BCrypt hashed |
+| fullname | VARCHAR(255) | | User's full name |
+| profile_image_url | TEXT | | Cloudinary URL |
+| is_active | BOOLEAN | DEFAULT false | Account activated |
+| activation_token | VARCHAR(255) | | Email verification |
+| deletion_requested_at | TIMESTAMP | | When deletion requested |
+| deletion_scheduled_at | TIMESTAMP | | When to delete |
+| is_pending_deletion | BOOLEAN | DEFAULT false | Deletion flag |
+| password_reset_token | VARCHAR(255) | | Password reset UUID |
+| password_reset_token_expiry | TIMESTAMP | | Token expiry |
+| created_at | TIMESTAMP | | Creation time |
+| updated_at | TIMESTAMP | | Last update |
+
+### tbl_expences
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| id | BIGSERIAL | PRIMARY KEY | |
+| profile_id | BIGINT | FK → tbl_profiles | Owner |
+| category_id | BIGINT | FK → tbl_category | Category |
+| name | VARCHAR(255) | NOT NULL | Description |
+| icon | VARCHAR(50) | | Emoji/icon |
+| amount | DECIMAL(15,2) | NOT NULL | Amount in INR |
+| date | DATE | NOT NULL | Transaction date |
+| created_at | TIMESTAMP | | |
+| updated_at | TIMESTAMP | | |
+
+### tbl_incomes
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| id | BIGSERIAL | PRIMARY KEY | |
+| profile_id | BIGINT | FK → tbl_profiles | Owner |
+| category_id | BIGINT | FK → tbl_category | Category |
+| name | VARCHAR(255) | NOT NULL | Description |
+| icon | VARCHAR(50) | | Emoji/icon |
+| amount | DECIMAL(15,2) | NOT NULL | Amount in INR |
+| date | DATE | NOT NULL | Transaction date |
+| created_at | TIMESTAMP | | |
+| updated_at | TIMESTAMP | | |
+
+### tbl_category
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| id | BIGSERIAL | PRIMARY KEY | |
+| profile_id | BIGINT | FK → tbl_profiles | Owner |
+| name | VARCHAR(255) | NOT NULL | Category name |
+| icon | VARCHAR(50) | | Emoji/icon |
+| type | VARCHAR(20) | NOT NULL | "income" or "expence" |
+| created_at | TIMESTAMP | | |
+| updated_at | TIMESTAMP | | |
+
+### tbl_subscription_plans
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| id | BIGSERIAL | PRIMARY KEY | |
+| name | VARCHAR(50) | UNIQUE | FREE/BASIC/PREMIUM |
+| description | VARCHAR(255) | | Human-readable |
+| monthly_price | DECIMAL(10,2) | | Monthly cost |
+| yearly_price | DECIMAL(10,2) | | Yearly cost |
+| currency | VARCHAR(3) | DEFAULT 'INR' | |
+| max_categories | INTEGER | | Category limit |
+| max_bank_imports | INTEGER | | CSV imports/month |
+| ai_queries_per_month | INTEGER | | AI query limit |
+| data_retention_months | INTEGER | | 0 = unlimited |
+| is_active | BOOLEAN | DEFAULT true | |
+
+### tbl_subscriptions
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| id | BIGSERIAL | PRIMARY KEY | |
+| profile_id | BIGINT | FK → tbl_profiles | User |
+| plan_id | BIGINT | FK → tbl_subscription_plans | Plan |
+| plan_type | VARCHAR(20) | | Quick lookup |
+| start_date | DATE | NOT NULL | |
+| end_date | DATE | NOT NULL | |
+| status | VARCHAR(20) | | ACTIVE/EXPIRED/etc |
+| razorpay_subscription_id | VARCHAR(255) | | Payment reference |
+| auto_renew | BOOLEAN | DEFAULT true | |
+| created_at | TIMESTAMP | | |
+| updated_at | TIMESTAMP | | |
+
+---
+
+# 6. Analytics & Insights
+
+## 6.1 Spending Analysis Explanation
+
+The system provides comprehensive spending analysis through multiple dimensions:
+
+### Category-wise Breakdown
+```
+How it's calculated:
+1. Fetch all expenses in date range
+2. Group by category name
+3. Sum amounts per category
+4. Sort by amount descending
+
+Frontend Chart: Pie/Donut Chart
+- Each slice represents a category
+- Size proportional to spending
+- Colors: Use distinct colors per category
+```
+
+
+### Daily Spending Trends
+```
+How it's calculated:
+1. Fetch expenses in date range
+2. Group by date
+3. Fill missing dates with 0
+4. Return as array of {date, amount}
+
+Frontend Chart: Line Chart / Area Chart
+- X-axis: Dates
+- Y-axis: Amount in ₹
+- Line shows spending trend
+```
+
+
+### Monthly Comparison
+```
+How it's calculated:
+1. Fetch expenses/incomes for each month
+2. Calculate total per month
+3. Return as array of {month, income, expense, savings}
+
+Frontend Chart: Bar Chart (grouped)
+- X-axis: Month names (Jan, Feb, etc.)
+- Y-axis: Amount in ₹
+- 3 bars per month: Income (green), Expense (red), Savings (blue)
+```
+
+
+## 6.2 Key Metrics Calculation
+
+| Metric | Formula | Description |
+|--------|---------|-------------|
+| Balance | Income - Expense | Net financial position |
+| Savings Rate | (Savings ÷ Income) × 100 | % of income saved |
+| Daily Average | Total ÷ Days | Average daily spending |
+| Projected Total | Daily Average × Days in Month | Expected month total |
+| Budget Usage | (Spent ÷ Budget) × 100 | % of budget used |
+
+## 6.3 AI Insights Types
+
+### SPENDING_ANALYSIS
+- Analyzes spending patterns
+- Identifies top categories
+- Suggests optimization areas
+- Priority: Based on savings rate
+
+### SAVINGS_STRATEGY
+- Personalized savings plan
+- Target setting recommendations
+- Step-by-step action items
+- Emergency fund advice
+
+### FINANCIAL_HEALTH
+- Overall health score (0-100)
+- Component breakdowns
+- Areas for improvement
+- Positive highlights
+
+## 6.4 Chart Recommendations
+
+### Dashboard Overview
+| Chart | Type | Data Source | Purpose |
+|-------|------|-------------|---------|
+| Balance Summary | Cards | `/dashboard` | Quick totals view |
+| Category Pie | Pie/Donut | `categoryBreakdown` | Spending distribution |
+| Recent Transactions | List | `recentTransactions` | Activity feed |
+| Monthly Trend | Line | `/api/analytics/monthly` | Spending pattern |
+
+### Analytics Page
+| Chart | Type | Data Source | Purpose |
+|-------|------|-------------|---------|
+| Daily Spending | Area | `dailySpending` | Day-by-day trend |
+| Income vs Expense | Bar | `monthlyTrends` | Monthly comparison |
+| Category Breakdown | Horizontal Bar | `categoryBreakdown` | Detailed view |
+| Savings Rate | Gauge | `savingsRate` | Health indicator |
+
+### Budget Tracking
+| Visual | Type | Data | Purpose |
+|--------|------|------|---------|
+| Budget Progress | Progress Bar | `percentageUsed` | Visual limit |
+| Over/Under | Color coding | `isOverBudget` | Alert state |
+| Category Cards | Card grid | Budget list | Overview |
+
+---
+
+# 7. User Workflows
+
+## 7.1 Complete User Journey
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         USER REGISTRATION FLOW                               │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+User fills registration form
+         │
+         ▼
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│  POST /register │────▶│  Account Created│────▶│ Activation Email│
+│                 │     │  (inactive)     │     │     Sent        │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+                                                         │
+                                                         ▼
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│  Account Active │◀────│ GET /activate/  │◀────│  User clicks    │
+│                 │     │     {token}     │     │  email link     │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            LOGIN FLOW                                        │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+User enters credentials
+         │
+         ▼
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│   POST /login   │────▶│  Validate creds │────▶│  Return JWT +   │
+│                 │     │  Check active   │     │  User profile   │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+                                                         │
+                                                         ▼
+                                                Store token in
+                                                localStorage
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      ADD TRANSACTION FLOW                                    │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+User clicks "Add Expense"
+         │
+         ▼
+┌─────────────────┐
+│  Show Add Form  │
+│  - Amount       │
+│  - Category     │
+│  - Description  │
+│  - Date         │
+└────────┬────────┘
+         │ Submit
+         ▼
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│ POST /expences  │────▶│  Save to DB     │────▶│ Check Budget    │
+│ with JWT token  │     │  Return created │     │ (log warning)   │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+         │
+         ▼
+Update UI with new transaction
+Refresh dashboard totals
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      VIEW ANALYTICS FLOW                                     │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+User navigates to Analytics
+         │
+         ▼
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│ GET /api/       │────▶│ Fetch data from │────▶│ Calculate       │
+│ analytics/      │     │ expense/income  │     │ aggregations    │
+│ monthly         │     │ repositories    │     │ & statistics    │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  Render Charts:                                                              │
+│  - Line chart: Daily spending trend                                         │
+│  - Pie chart: Category breakdown                                            │
+│  - Bar chart: Monthly comparison                                            │
+│  - Stats cards: Totals, averages, rates                                     │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+
+## 7.2 Recurring Transaction Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    RECURRING TRANSACTION LIFECYCLE                           │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+User creates recurring (e.g., "House Rent - ₹15000 - Monthly on 1st")
+         │
+         ▼
+┌─────────────────┐
+│ POST /api/      │
+│ recurring       │
+│                 │
+│ Calculate next  │
+│ execution date  │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        DAILY SCHEDULER (6 AM IST)                            │
+│                                                                              │
+│  For each recurring where nextExecution <= today:                           │
+│                                                                              │
+│  1. Check if past endDate → Deactivate                                      │
+│  2. Create expense/income record                                            │
+│  3. Set lastExecuted = nextExecution                                        │
+│  4. Calculate new nextExecution                                             │
+│  5. Reset reminderSent = false                                              │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     REMINDER SCHEDULER (9 AM IST)                            │
+│                                                                              │
+│  For each recurring where:                                                   │
+│  - isActive = true                                                           │
+│  - sendReminder = true                                                       │
+│  - reminderSent = false                                                      │
+│  - nextExecution within reminderDaysBefore                                  │
+│                                                                              │
+│  → Send email reminder                                                       │
+│  → Set reminderSent = true                                                  │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+
+## 7.3 Daily Notification Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    NOTIFICATION SCHEDULE                                     │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────┐     ┌──────────────────────────────────────────────────────┐
+│  10:00 PM    │────▶│ sendDailyIncomeExpenceReminder()                     │
+│  Daily       │     │                                                      │
+│              │     │ For each profile:                                    │
+│              │     │   Send "Don't forget to update your transactions"   │
+└──────────────┘     └──────────────────────────────────────────────────────┘
+
+┌──────────────┐     ┌──────────────────────────────────────────────────────┐
+│  11:00 PM    │────▶│ sendDailyExpenceSummery()                           │
+│  Daily       │     │                                                      │
+│              │     │ For each profile with expenses today:               │
+│              │     │   Build HTML table of today's expenses              │
+│              │     │   Send daily summary email                          │
+└──────────────┘     └──────────────────────────────────────────────────────┘
+
+┌──────────────┐     ┌──────────────────────────────────────────────────────┐
+│  9:30 AM     │────▶│ sendSubscriptionExpiryReminders()                   │
+│  Daily       │     │                                                      │
+│              │     │ Send reminders for subscriptions expiring in:       │
+│              │     │   - 7 days                                          │
+│              │     │   - 3 days                                          │
+│              │     │   - 1 day                                           │
+└──────────────┘     └──────────────────────────────────────────────────────┘
+
+┌──────────────┐     ┌──────────────────────────────────────────────────────┐
+│  9:00 PM     │────▶│ sendBudgetAlerts()                                  │
+│  Daily       │     │                                                      │
+│              │     │ For each budget near limit (>= alertThreshold%):    │
+│              │     │   If not already alerted → Send warning email       │
+└──────────────┘     └──────────────────────────────────────────────────────┘
+```
+
+
+---
+
+# 8. Error Handling & Edge Cases
+
+## 8.1 Standard Error Response Format
+
+```json
+{
+  "success": false,
+  "message": "Human-readable error message"
+}
+```
+
+
+For validation errors:
+```json
+{
+  "error": "Validation failed",
+  "message": "Detailed description",
+  "field": "fieldName"  // Optional
+}
+```
+
+
+## 8.2 HTTP Status Codes
+
+| Code | Meaning | When Used |
+|------|---------|-----------|
+| 200 | OK | Successful GET, PUT, POST |
+| 201 | Created | Resource created (POST) |
+| 204 | No Content | Successful DELETE |
+| 400 | Bad Request | Validation error, invalid input |
+| 401 | Unauthorized | Invalid/missing JWT |
+| 403 | Forbidden | Premium feature access denied |
+| 404 | Not Found | Resource doesn't exist |
+| 500 | Server Error | Unexpected error |
+
+## 8.3 Common Edge Cases
+
+### Invalid Inputs
+```
+Scenario: Empty required field
+Response: 400 Bad Request
+{
+  "error": "Validation failed",
+  "message": "Field 'name' is required"
+}
+
+Scenario: Invalid date format
+Response: 400 Bad Request
+{
+  "message": "Invalid date format. Use yyyy-MM-dd"
+}
+
+Scenario: Negative amount
+Response: 400 Bad Request
+{
+  "message": "Amount must be positive"
+}
+```
+
+
+### Missing Data
+```
+Scenario: Category not found
+Response: 404 Not Found
+{
+  "message": "Category not found with id: 999"
+}
+
+Scenario: Transaction not found
+Response: 404 Not Found
+{
+  "message": "Expense not found with id: 999"
+}
+```
+
+
+### Permission Denied
+```
+Scenario: Access other user's data
+Response: 403 Forbidden
+{
+  "message": "You don't have permission to delete this expense"
+}
+
+Scenario: Premium feature without subscription
+Response: 403 Forbidden
+{
+  "message": "This feature requires a BASIC or PREMIUM subscription. Please upgrade to access: AI Analysis"
+}
+```
+
+
+### Rate Limits
+```
+Scenario: AI query limit exceeded
+Response: 429 or custom error
+{
+  "message": "AI query limit reached for this month (5/5). Please upgrade to PREMIUM for more queries or wait until next month."
+}
+
+Scenario: CSV import limit exceeded
+Response: 403 Forbidden
+{
+  "message": "Monthly CSV import limit reached (3/3). Please upgrade to PREMIUM for unlimited imports."
+}
+```
+
+
+### Server Failures
+```
+Scenario: Database connection failed
+Response: 500 Internal Server Error
+{
+  "message": "Service temporarily unavailable. Please try again later."
+}
+
+Scenario: External API (Gemini) failed
+Response: 500 Internal Server Error
+{
+  "message": "AI service is temporarily unavailable. Please try again later."
+}
+
+Scenario: Circuit breaker open
+Response: 503 Service Unavailable
+{
+  "message": "AI service is temporarily unavailable due to rate limiting. Please try again in 2 minutes."
+}
+```
+
+
+## 8.4 Graceful Degradation
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     GRACEFUL DEGRADATION PATTERNS                            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  MongoDB Not Configured:                                                     │
+│  ├─ AI features still work                                                  │
+│  ├─ Query history not persisted                                             │
+│  ├─ Insights not stored                                                     │
+│  └─ Warning logged at startup                                               │
+│                                                                              │
+│  Redis Not Available:                                                        │
+│  ├─ Caching disabled                                                        │
+│  ├─ Features work but slower                                                │
+│  └─ Rate limiting uses in-memory fallback                                   │
+│                                                                              │
+│  Gemini API Rate Limited:                                                    │
+│  ├─ Retry with exponential backoff (3 attempts)                             │
+│  ├─ Circuit breaker opens after failures                                    │
+│  ├─ Returns cached data if available                                        │
+│  └─ User-friendly error message                                             │
+│                                                                              │
+│  Email Service Down:                                                         │
+│  ├─ Registration still succeeds                                             │
+│  ├─ User can request resend                                                 │
+│  └─ Warning logged, not thrown                                              │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+
+---
+
+# 9. UI/Frontend Hints
+
+## 9.1 Suggested Page Structure
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           APPLICATION STRUCTURE                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  📁 pages/                                                                   │
+│  ├── 🔓 public/                                                              │
+│  │   ├── LoginPage                   POST /login                            │
+│  │   ├── RegisterPage                POST /register                         │
+│  │   ├── ActivatePage                GET /activate/{token}                  │
+│  │   ├── ForgotPasswordPage          POST /forgot-password                  │
+│  │   ├── ResetPasswordPage           POST /reset-password                   │
+│  │   └── PricingPage                 GET /api/subscription/plans            │
+│  │                                                                           │
+│  └── 🔒 protected/ (requires JWT)                                           │
+│      ├── DashboardPage               GET /dashboard                         │
+│      ├── ExpensesPage                GET /expences, POST /expences          │
+│      ├── IncomesPage                 GET /incomes, POST /incomes            │
+│      ├── CategoriesPage              GET /categories                        │
+│      ├── AnalyticsPage               GET /api/analytics/*                   │
+│      ├── BudgetsPage                 GET /api/budgets                       │
+│      ├── RecurringPage               GET /api/recurring                     │
+│      ├── BankImportPage              POST /api/bank/import [BASIC+]         │
+│      ├── AiInsightsPage              GET /api/ai/* [BASIC+]                 │
+│      ├── SubscriptionPage            GET /api/subscription/current          │
+│      ├── PaymentPage                 POST /api/payments/*                   │
+│      ├── ProfilePage                 GET /profile                           │
+│      └── SettingsPage                Account deletion, preferences          │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+
+## 9.2 Dashboard Layout
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  HEADER: Logo | Navigation | Profile Avatar | Notifications                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐           │
+│  │   INCOME    │ │   EXPENSE   │ │   BALANCE   │ │  SAVINGS %  │           │
+│  │  ₹50,000    │ │  ₹35,000    │ │  ₹15,000    │ │    30%      │           │
+│  │  ↑ 5% vs    │ │  ↓ 3% vs    │ │             │ │             │           │
+│  │  last month │ │  last month │ │             │ │             │           │
+│  └─────────────┘ └─────────────┘ └─────────────┘ └─────────────┘           │
+│                                                                              │
+│  ┌───────────────────────────────┐ ┌───────────────────────────────────────┐│
+│  │    CATEGORY BREAKDOWN         │ │     RECENT TRANSACTIONS               ││
+│  │    (Pie/Donut Chart)          │ │                                       ││
+│  │                               │ │  🛒 Grocery    -₹1500   Today         ││
+│  │    [Food 35%]                 │ │  💰 Salary     +₹50000  Apr 1         ││
+│  │    [Transport 20%]            │ │  🍕 Swiggy     -₹350    Yesterday     ││
+│  │    [Utilities 15%]            │ │  ⛽ Petrol     -₹2000   Apr 15        ││
+│  │    [Others 30%]               │ │  📱 Mobile     -₹499    Apr 10        ││
+│  │                               │ │                                       ││
+│  └───────────────────────────────┘ │  [View All Transactions →]            ││
+│                                     └───────────────────────────────────────┘│
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────────┐│
+│  │                    SPENDING TREND (Line Chart)                           ││
+│  │                                                                          ││
+│  │    ₹3k│                 ╱╲                                              ││
+│  │       │    ╱╲          ╱  ╲        ╱╲                                   ││
+│  │    ₹2k│   ╱  ╲        ╱    ╲      ╱  ╲                                  ││
+│  │       │  ╱    ╲──────╱      ╲────╱    ╲                                 ││
+│  │    ₹1k│ ╱                              ╲                                ││
+│  │       │╱                                ╲                               ││
+│  │     ₹0└──────────────────────────────────────                           ││
+│  │        12  13  14  15  16  17  18  (Apr)                                ││
+│  └─────────────────────────────────────────────────────────────────────────┘│
+│                                                                              │
+│  FOOTER: © 2026 Money Manager | Support | Privacy                           │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+
+## 9.3 Component Suggestions
+
+### Authentication Components
+| Component | Props | API Integration |
+|-----------|-------|-----------------|
+| `<LoginForm />` | onSuccess, onError | POST /login |
+| `<RegisterForm />` | onSuccess | POST /register |
+| `<ForgotPasswordForm />` | onSuccess | POST /forgot-password |
+| `<ResetPasswordForm />` | token | POST /reset-password |
+
+### Transaction Components
+| Component | Props | API Integration |
+|-----------|-------|-----------------|
+| `<TransactionList />` | type, filters | GET /expences or /incomes |
+| `<TransactionForm />` | type, onSubmit | POST /expences or /incomes |
+| `<TransactionCard />` | transaction | Display only |
+| `<CategorySelect />` | type, value, onChange | GET /categories/{type} |
+
+### Analytics Components
+| Component | Props | API Integration |
+|-----------|-------|-----------------|
+| `<SpendingChart />` | period | GET /api/analytics/* |
+| `<CategoryPieChart />` | data | From analytics response |
+| `<MonthlyBarChart />` | data | `monthlyTrends` from API |
+| `<TrendLineChart />` | data | `dailySpending` from API |
+| `<StatsCard />` | label, value, trend | Calculated client-side |
+
+### Budget Components
+| Component | Props | API Integration |
+|-----------|-------|-----------------|
+| `<BudgetCard />` | budget | From GET /api/budgets |
+| `<BudgetProgress />` | used, total, threshold | Calculated |
+| `<BudgetForm />` | categoryId, onSubmit | POST /api/budgets |
+
+### AI Components (Premium)
+| Component | Props | API Integration |
+|-----------|-------|-----------------|
+| `<AiInsightCard />` | insight | From /api/ai/insights |
+| `<HealthScoreGauge />` | score, status | From /api/ai/financial-health |
+| `<AiChatBox />` | onAsk | POST /api/ai/ask |
+| `<PredictionChart />` | predictions | From /api/insights/predictions |
+
+## 9.4 API Integration Flow
+
+```javascript
+// Example: Axios instance with JWT interceptor
+const api = axios.create({
+  baseURL: 'https://api.moneymanager.com',
+  headers: {
+    'Content-Type': 'application/json'
+  }
+});
+
+// Add JWT to all requests
+api.interceptors.request.use(config => {
+  const token = localStorage.getItem('token');
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+// Handle 401 (redirect to login)
+api.interceptors.response.use(
+  response => response,
+  error => {
+    if (error.response?.status === 401) {
+      localStorage.removeItem('token');
+      window.location.href = '/login';
+    }
+    return Promise.reject(error);
+  }
+);
+
+// Example API calls
+export const dashboardApi = {
+  getDashboard: () => api.get('/dashboard'),
+  getAnalytics: (period) => api.get(`/api/analytics/${period}`),
+};
+
+export const transactionApi = {
+  addExpense: (data) => api.post('/expences', data),
+  addIncome: (data) => api.post('/incomes', data),
+  deleteExpense: (id) => api.delete(`/expences/${id}`),
+};
+
+export const aiApi = {
+  analyzeSpending: () => api.post('/api/ai/analyze-spending'),
+  getHealthScore: (refresh = false) =>
+    api.get(`/api/ai/financial-health?refresh=${refresh}`),
+  askQuestion: (question) =>
+    api.post('/api/ai/ask', { question }),
+};
+```
+
+
+## 9.5 State Management Recommendations
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      ZUSTAND STORE STRUCTURE                                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+stores/
+├── authStore.ts
+│   ├── user: User | null
+│   ├── token: string | null
+│   ├── login(email, password)
+│   ├── logout()
+│   └── isAuthenticated: boolean
+│
+├── dashboardStore.ts
+│   ├── totals: { income, expense, balance }
+│   ├── recentTransactions: Transaction[]
+│   ├── categoryBreakdown: Map<string, number>
+│   ├── fetchDashboard()
+│   └── isLoading: boolean
+│
+├── transactionStore.ts
+│   ├── expenses: Expense[]
+│   ├── incomes: Income[]
+│   ├── addExpense(data)
+│   ├── addIncome(data)
+│   └── deleteTransaction(type, id)
+│
+├── categoryStore.ts
+│   ├── categories: Category[]
+│   ├── fetchCategories()
+│   └── addCategory(data)
+│
+├── subscriptionStore.ts
+│   ├── currentPlan: Subscription
+│   ├── availablePlans: Plan[]
+│   ├── fetchCurrentPlan()
+│   └── isPremium: boolean
+│
+└── aiStore.ts
+    ├── insights: AiInsight[]
+    ├── healthScore: number
+    ├── remainingQueries: number
+    ├── analyzeSpending()
+    └── askQuestion(q)
+```
+
+
+---
+
+# 10. Advanced Notes
+
+## 10.1 Performance Optimizations
+
+### Database Level
+| Optimization | Implementation | Impact |
+|--------------|----------------|--------|
+| Indexed Queries | `@Index` on frequently queried columns | Faster lookups |
+| Pagination | `Pageable` for large datasets | Memory efficient |
+| Batch Processing | Limit recurring transactions per job | Protect DB |
+| Read-only Transactions | `@Transactional(readOnly = true)` | Connection pooling |
+| Query Limiting | Max 365 days for analytics | Prevent heavy queries |
+
+### Caching Strategy
+| Cache | TTL | Purpose |
+|-------|-----|---------|
+| `dashboard` | 5 minutes | Frequently accessed |
+| `subscription` | 1 hour | Rarely changes |
+| `categories` | 24 hours | Rarely changes |
+| `ai-insights` | 6 hours | Expensive to generate |
+| `analytics` | 10 minutes | Changes with transactions |
+| `predictions` | 6 hours | Computed data |
+| `anomalies` | 30 minutes | Recent data |
+| `ai-tips` | 6 hours | API cost reduction |
+
+### API Level
+| Optimization | Implementation | Benefit |
+|--------------|----------------|---------|
+| Rate Limiting | Guava RateLimiter for Gemini | Prevent quota exhaustion |
+| Circuit Breaker | After 3 failures, block 2 min | Prevent cascading failures |
+| Lazy Loading | `FetchType.LAZY` on relations | Reduce initial load |
+| Response Compression | Spring Boot default gzip | Reduce bandwidth |
+
+## 10.2 Scheduled Jobs Summary
+
+| Job | Schedule | Timezone | Description |
+|-----|----------|----------|-------------|
+| `executeRecurringTransactions` | 6:00 AM | IST | Auto-create recurring transactions |
+| `sendReminders` | 9:00 AM | IST | Bill reminder emails |
+| `sendDailyIncomeExpenceReminder` | 10:00 PM | IST | Daily update reminder |
+| `sendDailyExpenceSummery` | 11:00 PM | IST | Daily expense summary email |
+| `sendBudgetAlerts` | 9:00 PM | IST | Budget limit warnings |
+| `sendSubscriptionExpiryReminders` | 9:30 AM | IST | 7/3/1 day warnings |
+| `checkExpiredSubscriptions` | 12:00 AM | IST | Expire/grace period subscriptions |
+| `copyRecurringBudgetsToNewMonth` | 12:05 AM 1st | IST | Copy recurring budgets |
+| `cleanupOldData` | 3:00 AM | IST | Data retention cleanup |
+| `processScheduledDeletions` | 2:00 AM | UTC | Delete accounts after grace |
+| `cleanupOldBudgets` | 2:30 AM 1st | IST | Remove old budget records |
+
+## 10.3 Future Improvements
+
+### Short Term
+- [ ] WebSocket support for real-time dashboard updates
+- [ ] Export transactions to PDF/Excel
+- [ ] Multi-currency support
+- [ ] Dark mode API support (user preferences)
+- [ ] Batch transaction upload
+
+### Medium Term
+- [ ] Shared budgets (family accounts)
+- [ ] Goals tracking (save for vacation, etc.)
+- [ ] Investment tracking integration
+- [ ] Split expenses feature
+- [ ] Receipt OCR scanning
+
+### Long Term
+- [ ] Mobile app (React Native)
+- [ ] WhatsApp bot for quick entries
+- [ ] Bank API integration (Account Aggregator)
+- [ ] Machine learning for predictions
+- [ ] Multi-tenant architecture
+
+## 10.4 Scaling Considerations
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        SCALING ARCHITECTURE                                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  Current (Single Instance):                                                  │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │  Docker Container                                                    │    │
+│  │  ├─ Spring Boot App                                                 │    │
+│  │  ├─ Connected to: PostgreSQL, MongoDB, Redis                       │    │
+│  │  └─ Handles ~100-500 concurrent users                               │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  Scaled (Multiple Instances):                                                │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │  Load Balancer (Nginx/AWS ALB)                                      │    │
+│  │           │                                                          │    │
+│  │    ┌──────┼──────┐                                                   │    │
+│  │    ▼      ▼      ▼                                                   │    │
+│  │  ┌───┐  ┌───┐  ┌───┐                                                │    │
+│  │  │App│  │App│  │App│  (Stateless - JWT auth)                        │    │
+│  │  │ 1 │  │ 2 │  │ 3 │                                                │    │
+│  │  └─┬─┘  └─┬─┘  └─┬─┘                                                │    │
+│  │    │      │      │                                                   │    │
+│  │    └──────┴──────┘                                                   │    │
+│  │           │                                                          │    │
+│  │    ┌──────┴──────┐                                                   │    │
+│  │    ▼             ▼                                                   │    │
+│  │  ┌─────┐      ┌─────┐                                               │    │
+│  │  │Redis│      │ DB  │ (PostgreSQL with read replicas)               │    │
+│  │  │Cluster│    │Cluster│                                              │    │
+│  │  └─────┘      └─────┘                                               │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  Considerations:                                                             │
+│  • Scheduled jobs need leader election (use ShedLock)                       │
+│  • Session-less (JWT) already supports horizontal scaling                   │
+│  • Redis for distributed caching already configured                         │
+│  • MongoDB Atlas handles its own scaling                                    │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+
+## 10.5 Environment Variables Reference
+
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `DATABASE_URL` | PostgreSQL connection URL | Yes |
+| `MONGODB_URI` | MongoDB connection URI | No |
+| `REDIS_HOST` | Redis server host | Yes |
+| `REDIS_PORT` | Redis server port | Yes |
+| `REDIS_PASSWORD` | Redis password | No |
+| `JWT_SECRET` | JWT signing key (min 64 chars) | Yes |
+| `JWT_EXPIRATION` | Token expiry in milliseconds | Yes |
+| `GEMINI_API_KEY` | Google Gemini API key | Yes |
+| `RAZORPAY_KEY_ID` | Razorpay public key | Yes |
+| `RAZORPAY_KEY_SECRET` | Razorpay secret key | Yes |
+| `CLOUDINARY_CLOUD_NAME` | Cloudinary account name | Yes |
+| `CLOUDINARY_API_KEY` | Cloudinary API key | Yes |
+| `CLOUDINARY_API_SECRET` | Cloudinary secret | Yes |
+| `SMTP_HOST` | Email server host | Yes |
+| `SMTP_PORT` | Email server port | Yes |
+| `SMTP_USERNAME` | Email username | Yes |
+| `SMTP_PASSWORD` | Email password | Yes |
+| `FRONTEND_URL` | Frontend URL for links | Yes |
+
+---
+
+## Document Information
+
+| Field | Value |
+|-------|-------|
+| Version | 1.0.0 |
+| Last Updated | 2026-04-18 |
+| Author | AI Assistant |
+| Project | Money Manager Backend |
+| Stack | Java 21, Spring Boot, PostgreSQL, MongoDB, Redis |
+
+---
+
+This documentation provides everything needed for a frontend developer or AI to build a complete frontend application that integrates with this backend system.

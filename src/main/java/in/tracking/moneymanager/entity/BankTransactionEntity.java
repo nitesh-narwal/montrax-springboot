@@ -30,7 +30,7 @@ public class BankTransactionEntity {
     private Long profileId;
 
     // Bank name: SBI, HDFC, ICICI, AXIS, KOTAK
-    @Column(name = "bank_name")
+    @Column(name = "bank_name", length = 50)
     private String bankName;
 
     // Transaction date from CSV
@@ -42,7 +42,7 @@ public class BankTransactionEntity {
     private String description;
 
     // Reference number or cheque number
-    @Column(name = "reference_number")
+    @Column(name = "reference_number", length = 100)
     private String referenceNumber;
 
     // Transaction amount (always positive, use type to differentiate)
@@ -50,7 +50,7 @@ public class BankTransactionEntity {
     private BigDecimal amount;
 
     // Type: CREDIT (income) or DEBIT (expense)
-    @Column(nullable = false)
+    @Column(nullable = false, length = 10)
     private String type;
 
     // Account balance after this transaction
@@ -61,11 +61,11 @@ public class BankTransactionEntity {
     private Long categoryId;
 
     // AI-suggested category name (before user confirms)
-    @Column(name = "suggested_category")
+    @Column(name = "suggested_category", length = 100)
     private String suggestedCategory;
 
     // Extracted merchant name from description
-    @Column(name = "merchant_name")
+    @Column(name = "merchant_name", length = 150)
     private String merchantName;
 
     // Whether this has been converted to expense/income

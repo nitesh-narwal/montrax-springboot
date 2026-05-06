@@ -1,5 +1,6 @@
 package in.tracking.moneymanager.controller;
 
+import in.tracking.moneymanager.dto.CommonResponse;
 import in.tracking.moneymanager.dto.ExpenceDTO;
 import in.tracking.moneymanager.service.ExpenceService;
 import lombok.RequiredArgsConstructor;
@@ -17,11 +18,12 @@ public class ExpenceController {
     private final ExpenceService expenceService;
 
      // Endpoint to add a new expence
-    @PostMapping
-    public ResponseEntity<ExpenceDTO> addExpence(@RequestBody ExpenceDTO expenceDTO) {
-        ExpenceDTO createdExpence = expenceService.addExpence(expenceDTO);
-        return ResponseEntity.status(HttpStatus.CREATED).body(createdExpence);
-    }
+     @PostMapping
+     public ResponseEntity<CommonResponse<ExpenceDTO>> addExpence(@RequestBody ExpenceDTO expenceDTO) {
+         ExpenceDTO createdExpence = expenceService.addExpence(expenceDTO);
+         return ResponseEntity.status(HttpStatus.CREATED)
+                 .body(CommonResponse.success(createdExpence, "Expense created successfully"));
+     }
 
     //Endpoint to get all expence
     @GetMapping
