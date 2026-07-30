@@ -43,10 +43,19 @@ jobs:
           host: ${{ secrets.OCI_HOST }}
           username: ${{ secrets.OCI_USER }}
           key: ${{ secrets.OCI_SSH_KEY }}
-          script:
-            docker pull ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME}}:latest
-            docker stop ${{ secrets.OCI_CONTAINER_NAME }}
-            docker rm ${{ secrets.OCI_CONTAINER_NAME }}
-            docker run -d --name ${{ secrets.OCI_CONTAINER_NAME }} --restart unless-stopped --env-file /home/${{ secrets.OCI_USER }}/apps/app2/.env -v /home/${{ secrets.OCI_USER }}/apps/app2/certs:/app/certs:ro -p 8090:8090 ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME}}:latest
-            docker image prune -f
+          script: |
+             docker pull ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+
+             docker stop ${{ secrets.OCI_CONTAINER_NAME }} || true
+             docker rm ${{ secrets.OCI_CONTAINER_NAME }} || true
+
+             docker run -d \
+              --name ${{ secrets.OCI_CONTAINER_NAME }} \
+              --restart unless-stopped \
+              --env-file /home/${{ secrets.OCI_USER }}/apps/app2/.env \
+              -v /home/${{ secrets.OCI_USER }}/apps/app2/certs:/app/certs:ro \
+              -p 8090:8090 \
+              ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+
+             docker image prune -f
             
