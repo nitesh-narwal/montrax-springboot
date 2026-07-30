@@ -2,6 +2,7 @@ package in.tracking.moneymanager.service;
 
 import in.tracking.moneymanager.entity.ProfileEntity;
 import in.tracking.moneymanager.repository.*;
+import in.tracking.moneymanager.service.messaging.EmailMessageProducer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -29,7 +30,7 @@ public class AccountDeletionScheduler {
     private final SubscriptionRepository subscriptionRepository;
     private final PaymentHistoryRepository paymentHistoryRepository;
     private final BankTransactionRepository bankTransactionRepository;
-    private final EmailService emailService;
+    private final EmailMessageProducer emailMessageProducer;
 
     /**
      * Run daily at 2 AM to delete accounts that have passed the 3-day grace period.
@@ -113,7 +114,7 @@ public class AccountDeletionScheduler {
                 "Best regards,\nMoney Manager Team",
                 fullname
             );
-            emailService.sendEmail(email, subject, body);
+            emailMessageProducer.send(email, subject, body);
         } catch (Exception e) {
             log.warn("Failed to send deletion confirmation email to {}: {}", email, e.getMessage());
         }

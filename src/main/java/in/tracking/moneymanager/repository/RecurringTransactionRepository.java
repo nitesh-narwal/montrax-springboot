@@ -17,7 +17,7 @@ import java.util.List;
 public interface RecurringTransactionRepository extends JpaRepository<RecurringTransactionEntity, Long> {
 
     // Find all active recurring transactions for a user
-    List<RecurringTransactionEntity> findByProfileIdAndIsActiveTrue(ProfileEntity profile);
+    List<RecurringTransactionEntity> findByProfileAndIsActiveTrue(ProfileEntity profile);
 
     // Find transactions due for execution today or earlier (batch limited for safety)
     @Query("SELECT r FROM RecurringTransactionEntity r WHERE r.isActive = true " +
@@ -39,7 +39,7 @@ public interface RecurringTransactionRepository extends JpaRepository<RecurringT
     void resetReminderFlags(@Param("ids") List<Long> ids);
 
     // Count active recurring for a profile (for limits)
-    long countByProfileIdAndIsActiveTrue(ProfileEntity profile);
+    long countByProfileAndIsActiveTrue(ProfileEntity profile);
 
     // Delete all recurring transactions for a profile (used for account deletion)
     void deleteByProfileId(Long profileId);

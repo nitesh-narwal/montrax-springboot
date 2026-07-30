@@ -55,7 +55,7 @@ public class BankTransactionEntity {
     private LocalDate transactionDate;
 
     // Transaction description/narration from bank
-    @Column(name = "description", columnDefinition = "CLOB")
+    @Column(name = "description", columnDefinition = "TEXT")
     private String description;
 
     // Reference number or cheque number

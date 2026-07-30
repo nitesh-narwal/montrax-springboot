@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.util.concurrent.RateLimiter;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -15,46 +14,28 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
-/**
- * Service for interacting with Google Gemini AI.
- * Includes rate limiting and retry logic to respect free tier limits.
- *
- * Free Tier Limits (Gemini 2.5 Flash - March 2026):
- * - 15 requests per minute (RPM)
- * - 250 requests per day (RPD)
- *
- * Get your API key from: https://aistudio.google.com/app/apikey
- */
 @Service
 @Slf4j
 public class GeminiService {
 
     private final WebClient webClient;
-    private final String apiKey;
-    private final String model;
+    private final AppCacheService appCacheService;
     private final ObjectMapper objectMapper;
 
-    // Rate limiter: Conservative - 10 requests per minute (0.167 permits/second)
-    // Free tier allows 15 RPM, we use 10 to have buffer
     private final RateLimiter rateLimiter = RateLimiter.create(0.167);
-
-    // Track consecutive failures for circuit breaker pattern
     private final AtomicInteger consecutiveFailures = new AtomicInteger(0);
     private volatile long circuitBreakerResetTime = 0;
 
-    // Max retries for rate limit errors
     private static final int MAX_RETRIES = 2;
-    private static final long INITIAL_BACKOFF_MS = 5000; // 5 seconds
-    private static final long CIRCUIT_BREAKER_TIMEOUT_MS = 120000; // 2 minutes
+    private static final long INITIAL_BACKOFF_MS = 5000;
+    private static final long CIRCUIT_BREAKER_TIMEOUT_MS = 120000;
 
-    public GeminiService(
-            @Value("${gemini.api.key}") String apiKey,
-            @Value("${gemini.model}") String model,
-            @Value("${gemini.api.url}") String apiUrl) {
-
-        this.apiKey = apiKey;
-        this.model = model;
+    public GeminiService(AppCacheService appCacheService) {
+        this.appCacheService = appCacheService;
         this.objectMapper = new ObjectMapper();
+
+        String apiUrl = appCacheService.get("gemini.api.url",
+                "https://generativelanguage.googleapis.com/v1beta/models");
 
         this.webClient = WebClient.builder()
                 .baseUrl(apiUrl)
@@ -62,7 +43,15 @@ public class GeminiService {
                 .codecs(configurer -> configurer.defaultCodecs().maxInMemorySize(5 * 1024 * 1024))
                 .build();
 
-        log.info("GeminiService initialized with model: {}", model);
+        log.info("GeminiService initialized with model: {}", appCacheService.get("gemini.model"));
+    }
+
+    private String getApiKey() {
+        return appCacheService.get("gemini.api.key");
+    }
+
+    private String getModel() {
+        return appCacheService.get("gemini.model");
     }
 
     /**
@@ -113,7 +102,7 @@ public class GeminiService {
 
             // Call Gemini API
             String response = webClient.post()
-                    .uri("/{model}:generateContent?key={key}", model, apiKey)
+                    .uri("/{model}:generateContent?key={key}", getModel(), getApiKey())
                     .contentType(MediaType.APPLICATION_JSON)
                     .bodyValue(requestBody)
                     .retrieve()
@@ -152,7 +141,7 @@ public class GeminiService {
                 throw new RuntimeException("AI service is busy due to rate limiting. Please try again in " + waitMinutes + " minutes.", e);
             }
         } catch (WebClientResponseException.NotFound e) {
-            log.error("Gemini API model not found (404). Model: {}. The model may have been deprecated.", model);
+            log.error("Gemini API model not found (404). Model: {}. The model may have been deprecated.", getModel());
             throw new RuntimeException("AI model not available. Please contact support to update the AI configuration.", e);
         } catch (WebClientResponseException.Unauthorized e) {
             log.error("Gemini API unauthorized (401). API key may be invalid.");

@@ -1,18 +1,24 @@
 package in.tracking.moneymanager.service;
 
 import in.tracking.moneymanager.dto.IncomeDTO;
+import in.tracking.moneymanager.dto.PagedResponse;
 import in.tracking.moneymanager.entity.CategoryEntity;
 import in.tracking.moneymanager.entity.IncomeEntity;
 import in.tracking.moneymanager.entity.ProfileEntity;
+import in.tracking.moneymanager.dto.event.TransactionEvent;
 import in.tracking.moneymanager.repository.CategoryRepository;
 import in.tracking.moneymanager.repository.IncomeRepository;
+import in.tracking.moneymanager.service.event.TransactionEventPublisher;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 
 @Service
@@ -23,6 +29,7 @@ public class IncomeService {
     private final CategoryRepository categoryRepository;
     private final IncomeRepository incomeRepository;
     private final ProfileService profileService;
+    private final TransactionEventPublisher transactionEventPublisher;
 
 
     @Transactional
@@ -32,6 +39,15 @@ public class IncomeService {
                 .orElseThrow(() -> new RuntimeException("Category not found with id: " + dto.getCategoryId()));
         IncomeEntity newIncome = toEntity(dto, profile, category);
         IncomeEntity savedIncome = incomeRepository.save(newIncome);
+        transactionEventPublisher.publish(TransactionEvent.builder()
+                .profileId(profile.getId())
+                .transactionId(savedIncome.getId())
+                .type("INCOME")
+                .action("CREATED")
+                .amount(savedIncome.getAmount())
+                .categoryName(category.getName())
+                .occurredAt(LocalDateTime.now())
+                .build());
         return toDTO(savedIncome);
     }
 
@@ -53,6 +69,15 @@ public class IncomeService {
             throw new RuntimeException("You don't have permission to delete this income");
         }
         incomeRepository.deleteById(incomeId);
+        transactionEventPublisher.publish(TransactionEvent.builder()
+                .profileId(profile.getId())
+                .transactionId(incomeId)
+                .type("INCOME")
+                .action("DELETED")
+                .amount(entity.getAmount())
+                .categoryName(entity.getCategory() != null ? entity.getCategory().getName() : null)
+                .occurredAt(LocalDateTime.now())
+                .build());
     }
 
     //get latest 5 income for current user
@@ -90,6 +115,21 @@ public class IncomeService {
                 .toList();
     }
 
+    //paginated income history for current user
+    public PagedResponse<IncomeDTO> getIncomesPaginated(Pageable pageable) {
+        ProfileEntity profile = profileService.getCurrentProfile();
+        Page<IncomeEntity> page = incomeRepository.findByProfileId(profile.getId(), pageable);
+        return PagedResponse.of(page, this::toDTO);
+    }
+
+    //paginated + filtered income history
+    public PagedResponse<IncomeDTO> filterIncomesPaginated(LocalDate startDate, LocalDate endDate, String keyword, Pageable pageable) {
+        ProfileEntity profile = profileService.getCurrentProfile();
+        Page<IncomeEntity> page = incomeRepository.findByProfileIdAndDateBetweenAndNameContainingIgnoreCase(
+                profile.getId(), startDate, endDate, keyword, pageable);
+        return PagedResponse.of(page, this::toDTO);
+    }
+
 
     /**
      * Add income for a specific profile (used by recurring transactions).
@@ -121,6 +161,7 @@ public class IncomeService {
                 .icon(incomeDTO.getIcon())
                 .amount(incomeDTO.getAmount())
                 .date(incomeDTO.getDate())
+                .attachmentUrl(incomeDTO.getAttachmentUrl())
                 .profile(profile)
                 .category(category)
                 .build();
@@ -135,6 +176,7 @@ public class IncomeService {
                 .categoryName(entity.getCategory() != null ? entity.getCategory().getName(): "N/A")
                 .amount(entity.getAmount())
                 .date(entity.getDate())
+                .attachmentUrl(entity.getAttachmentUrl())
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())
                 .build();

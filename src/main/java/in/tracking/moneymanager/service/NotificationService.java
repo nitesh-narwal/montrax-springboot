@@ -3,9 +3,9 @@ package in.tracking.moneymanager.service;
 import in.tracking.moneymanager.dto.ExpenceDTO;
 import in.tracking.moneymanager.entity.ProfileEntity;
 import in.tracking.moneymanager.repository.ProfileRepository;
+import in.tracking.moneymanager.service.messaging.EmailMessageProducer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -19,11 +19,13 @@ import java.util.List;
 public class NotificationService {
 
     private final ProfileRepository profileRepository;
-    private final EmailService emailService;
+    private final EmailMessageProducer emailMessageProducer;
     private final ExpenceService expenceService;
+    private final AppCacheService appCacheService;
 
-    @Value("${money.manager.frontend.url}")
-    private String frontendUrl;
+    private String getFrontendUrl() {
+        return appCacheService.get("money.manager.frontend.url", "http://localhost:5173");
+    }
 
     @Scheduled(cron = "0 0 22 * * *", zone = "Asia/Kolkata")
     public void sendDailyIncomeExpenceReminder(){
@@ -51,7 +53,7 @@ public class NotificationService {
                             + "          Staying consistent helps you track your financial growth."
                             + "      </p>"
                             + "      <div style='text-align: center; margin-top: 20px;'>"
-                            + "          <a href='" + frontendUrl + "' "
+                            + "          <a href='" + getFrontendUrl() + "' "
                             + "             style='background-color: #2c3e50; color: #ffffff; "
                             + "                    padding: 10px 18px; text-decoration: none; "
                             + "                    border-radius: 5px; font-size: 14px;'>"
@@ -65,7 +67,7 @@ public class NotificationService {
                             + "  </div>"
                             + "</div>";
 
-            emailService.sendEmail(profile.getEmail(), "Daily Reminder: Update Your Income and Expenses", body);
+            emailMessageProducer.send(profile.getEmail(), "Daily Reminder: Update Your Income and Expenses", body);
             log.info("Daily income and expence reminder sent to: {}", profile.getEmail());
             } catch (Exception e) {
                 log.error("Failed to send email to {}: {}", profile.getEmail(), e.getMessage(), e);
@@ -108,7 +110,7 @@ public class NotificationService {
                                 + "      </p>"
                                 + table.toString()
                                 + "      <div style='text-align: center; margin-top: 20px;'>"
-                                + "          <a href='" + frontendUrl + "' "
+                                + "          <a href='" + getFrontendUrl() + "' "
                                 + "             style='background-color: #2c3e50; color: #ffffff; "
                                 + "                    padding: 10px 18px; text-decoration: none; "
                                 + "                    border-radius: 5px; font-size: 14px;'>"
@@ -122,7 +124,7 @@ public class NotificationService {
                                 + "  </div>"
                                 + "</div>";
 
-                emailService.sendEmail(profile.getEmail(), "Your Daily Expense Summary", body);
+                emailMessageProducer.send(profile.getEmail(), "Your Daily Expense Summary", body);
             }
         }
         log.info("Daily expence summery sent to");

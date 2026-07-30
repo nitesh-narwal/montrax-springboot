@@ -9,6 +9,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.util.Map;
+import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
@@ -106,6 +107,67 @@ public class CloudinaryService {
         } catch (Exception e) {
             // Resource not found or other error
             return false;
+        }
+    }
+
+    /**
+     * Upload a transaction receipt (expense/income proof) to Cloudinary.
+     * Unlike profile images, each receipt gets a unique public_id so multiple
+     * receipts can coexist per user.
+     *
+     * @param file The receipt file to upload (image or PDF)
+     * @param userId The owning user's ID (used for folder scoping only)
+     * @return The secure URL of the uploaded receipt
+     * @throws IOException If upload fails
+     */
+    public String uploadReceipt(MultipartFile file, Long userId) throws IOException {
+        validateReceiptFile(file);
+
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> uploadResult = cloudinary.uploader().upload(file.getBytes(), ObjectUtils.asMap(
+                    "folder", "money-manager/receipts/user_" + userId,
+                    "public_id", UUID.randomUUID().toString(),
+                    "resource_type", "auto"
+            ));
+
+            String secureUrl = (String) uploadResult.get("secure_url");
+            log.info("Receipt uploaded successfully for user {}: {}", userId, secureUrl);
+            return secureUrl;
+
+        } catch (IOException e) {
+            log.error("Failed to upload receipt for user {}: {}", userId, e.getMessage());
+            throw new IOException("Failed to upload receipt to Cloudinary: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Validate a receipt upload (images or PDF, up to 10MB).
+     */
+    private void validateReceiptFile(MultipartFile file) {
+        if (file == null || file.isEmpty()) {
+            throw new IllegalArgumentException("File is empty or not provided");
+        }
+
+        long maxSize = 10 * 1024 * 1024;
+        if (file.getSize() > maxSize) {
+            throw new IllegalArgumentException("File size must be less than 10MB");
+        }
+
+        String contentType = file.getContentType();
+        String[] allowedTypes = {"image/jpeg", "image/png", "image/gif", "image/webp", "application/pdf"};
+        boolean isAllowed = contentType != null;
+        if (isAllowed) {
+            isAllowed = false;
+            for (String type : allowedTypes) {
+                if (type.equals(contentType)) {
+                    isAllowed = true;
+                    break;
+                }
+            }
+        }
+        if (!isAllowed) {
+            throw new IllegalArgumentException("Only JPEG, PNG, GIF, WebP images or PDF files are allowed");
         }
     }
 

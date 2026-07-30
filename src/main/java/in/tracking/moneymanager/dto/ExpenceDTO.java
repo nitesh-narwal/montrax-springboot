@@ -21,6 +21,7 @@ public class ExpenceDTO {
     private Long categoryId;
     private BigDecimal amount;
     private LocalDate date;
+    private String attachmentUrl;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 }

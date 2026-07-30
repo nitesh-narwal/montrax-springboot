@@ -1,19 +1,27 @@
 package in.tracking.moneymanager.service;
 
 import in.tracking.moneymanager.dto.ExpenceDTO;
+import in.tracking.moneymanager.dto.PagedResponse;
 import in.tracking.moneymanager.entity.CategoryEntity;
 import in.tracking.moneymanager.entity.ExpenceEntity;
 import in.tracking.moneymanager.entity.ProfileEntity;
+import in.tracking.moneymanager.dto.event.TransactionEvent;
+import in.tracking.moneymanager.event.ExpenseCreatedEvent;
 import in.tracking.moneymanager.repository.CategoryRepository;
 import in.tracking.moneymanager.repository.ExpenceRepository;
+import in.tracking.moneymanager.service.event.TransactionEventPublisher;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 
 @Slf4j
@@ -25,7 +33,8 @@ public class ExpenceService {
     private final CategoryRepository categoryRepository;
     private final ExpenceRepository expenceRepository;
     private final ProfileService profileService;
-    private final BudgetGoalService budgetGoalService;
+    private final TransactionEventPublisher transactionEventPublisher;
+    private final ApplicationEventPublisher applicationEventPublisher;
 
     @Transactional
     public ExpenceDTO addExpence(ExpenceDTO dto) {
@@ -34,14 +43,18 @@ public class ExpenceService {
                 .orElseThrow(() -> new RuntimeException("Category not found with id: " + dto.getCategoryId()));
         ExpenceEntity newExpence = toEntity(dto, profile, category);
         ExpenceEntity savedExpence = expenceRepository.save(newExpence);
-        // budget warning hook
-        String warning = budgetGoalService.checkBudgetStatus(
-                category.getId(),
-                profile.getId()
-        );
-        if (warning != null) {
-            log.info("Budget warning for profile {}: {}", profile.getId(), warning);
-        }
+        // Decoupled from BudgetGoalService: it listens for this event to check budget thresholds
+        applicationEventPublisher.publishEvent(
+                new ExpenseCreatedEvent(this, profile.getId(), category.getId(), savedExpence.getAmount()));
+        transactionEventPublisher.publish(TransactionEvent.builder()
+                .profileId(profile.getId())
+                .transactionId(savedExpence.getId())
+                .type("EXPENSE")
+                .action("CREATED")
+                .amount(savedExpence.getAmount())
+                .categoryName(category.getName())
+                .occurredAt(LocalDateTime.now())
+                .build());
         return toDTO(savedExpence);
     }
 
@@ -63,6 +76,15 @@ public class ExpenceService {
             throw new RuntimeException("You don't have permission to delete this expence");
         }
         expenceRepository.deleteById(expenceId);
+        transactionEventPublisher.publish(TransactionEvent.builder()
+                .profileId(profile.getId())
+                .transactionId(expenceId)
+                .type("EXPENSE")
+                .action("DELETED")
+                .amount(entity.getAmount())
+                .categoryName(entity.getCategory() != null ? entity.getCategory().getName() : null)
+                .occurredAt(LocalDateTime.now())
+                .build());
     }
 
     //get latest 5 expence for current user
@@ -106,6 +128,21 @@ public class ExpenceService {
                 .toList();
     }
 
+    //paginated expense history for current user
+    public PagedResponse<ExpenceDTO> getExpencesPaginated(Pageable pageable) {
+        ProfileEntity profile = profileService.getCurrentProfile();
+        Page<ExpenceEntity> page = expenceRepository.findByProfileId(profile.getId(), pageable);
+        return PagedResponse.of(page, this::toDTO);
+    }
+
+    //paginated + filtered expense history
+    public PagedResponse<ExpenceDTO> filterExpencesPaginated(LocalDate startDate, LocalDate endDate, String keyword, Pageable pageable) {
+        ProfileEntity profile = profileService.getCurrentProfile();
+        Page<ExpenceEntity> page = expenceRepository.findByProfileIdAndDateBetweenAndNameContainingIgnoreCase(
+                profile.getId(), startDate, endDate, keyword, pageable);
+        return PagedResponse.of(page, this::toDTO);
+    }
+
     /**
      * Add expense for a specific profile (used by recurring transactions).
      * Does not require authentication context.
@@ -137,6 +174,7 @@ public class ExpenceService {
                 .icon(expenceDTO.getIcon())
                 .amount(expenceDTO.getAmount())
                 .date(expenceDTO.getDate())
+                .attachmentUrl(expenceDTO.getAttachmentUrl())
                 .profile(profile)
                 .category(category)
                 .build();
@@ -151,6 +189,7 @@ public class ExpenceService {
                 .categoryName(entity.getCategory() != null ? entity.getCategory().getName() : "N/A")
                 .amount(entity.getAmount())
                 .date(entity.getDate())
+                .attachmentUrl(entity.getAttachmentUrl())
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())
                 .build();

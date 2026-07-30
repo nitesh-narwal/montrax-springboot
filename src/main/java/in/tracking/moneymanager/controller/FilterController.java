@@ -4,7 +4,9 @@ import in.tracking.moneymanager.dto.FilterDTO;
 import in.tracking.moneymanager.service.ExpenceService;
 import in.tracking.moneymanager.service.IncomeService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -36,6 +38,23 @@ public class FilterController {
             return ResponseEntity.ok(incomeService.filterIncomes(startDate, endDate, keyword, sort));
         }else if("expence".equalsIgnoreCase(filter.getType())){
             return ResponseEntity.ok(expenceService.filterExpences(startDate, endDate, keyword, sort));
+        }else {
+            return ResponseEntity.badRequest().body("Invalid type, Must be either income or expence ");
+        }
+    }
+
+    // Paginated filter: POST /filter/paged?page=0&size=20&sort=date,desc
+    @PostMapping("/paged")
+    public ResponseEntity<?> filterTransactionsPaged(
+            @RequestBody FilterDTO filter,
+            @PageableDefault(size = 20, sort = "date") Pageable pageable) {
+        LocalDate startDate = filter.getStartDate() != null ? filter.getStartDate() : PG_MIN_DATE;
+        LocalDate endDate = filter.getEndDate() != null ? filter.getEndDate() : LocalDate.now();
+        String keyword = filter.getKeyword() != null ? filter.getKeyword() : "";
+        if("income".equalsIgnoreCase(filter.getType())){
+            return ResponseEntity.ok(incomeService.filterIncomesPaginated(startDate, endDate, keyword, pageable));
+        }else if("expence".equalsIgnoreCase(filter.getType())){
+            return ResponseEntity.ok(expenceService.filterExpencesPaginated(startDate, endDate, keyword, pageable));
         }else {
             return ResponseEntity.badRequest().body("Invalid type, Must be either income or expence ");
         }

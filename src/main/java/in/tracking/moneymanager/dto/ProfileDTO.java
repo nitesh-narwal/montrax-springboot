@@ -9,6 +9,7 @@ import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
 
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 
 @Data
 @AllArgsConstructor
@@ -20,6 +21,11 @@ public class ProfileDTO {
     private String email;
     private String password;
     private String profileImageUrl;
+    private String role;
+    private String phoneNumber;
+    private Boolean isPhoneVerified;
+    private String authProvider;
+    private LocalTime notificationTime;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 }

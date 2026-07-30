@@ -8,9 +8,12 @@ import in.tracking.moneymanager.entity.ProfileEntity;
 import in.tracking.moneymanager.repository.BudgetGoalRepository;
 import in.tracking.moneymanager.repository.CategoryRepository;
 import in.tracking.moneymanager.repository.ExpenceRepository;
+import in.tracking.moneymanager.event.ExpenseCreatedEvent;
 import in.tracking.moneymanager.repository.ProfileRepository;
+import in.tracking.moneymanager.service.messaging.EmailMessageProducer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -41,8 +44,10 @@ public class BudgetGoalService {
     private final CategoryRepository categoryRepository;
     private final ProfileRepository profileRepository;
     private final ProfileService profileService;
-    private final EmailService emailService;
+    private final EmailMessageProducer emailMessageProducer;
 
+    // Default hour (24h, IST) budget alerts are sent at when the user hasn't set a preference
+    private static final int DEFAULT_ALERT_HOUR = 21;
 
     /**
      * Get all budget goals for current month with progress calculations.
@@ -95,9 +100,16 @@ public class BudgetGoalService {
                 : budgetGoalRepository.findByProfileIdAndCategoryIdIsNullAndMonthAndYear(
                         profileId, current.getMonthValue(), current.getYear());
 
+        // Fetch entities for relationships
+        ProfileEntity profileEntity = profileRepository.findById(profileId)
+                .orElseThrow(() -> new RuntimeException("Profile not found"));
+        CategoryEntity categoryEntity = categoryId != null
+                ? categoryRepository.findById(categoryId).orElse(null)
+                : null;
+
         BudgetGoalEntity budget = existing.orElse(BudgetGoalEntity.builder()
-                .profileId(profileId)
-                .categoryId(categoryId)
+                .profile(profileEntity)
+                .category(categoryEntity)
                 .month(current.getMonthValue())
                 .year(current.getYear())
                 .build());
@@ -123,7 +135,7 @@ public class BudgetGoalService {
         BudgetGoalEntity budget = budgetGoalRepository.findById(budgetId)
                 .orElseThrow(() -> new RuntimeException("Budget goal not found"));
 
-        if (!budget.getProfileId().equals(profileId)) {
+        if (!budget.getProfile().getId().equals(profileId)) {
             throw new RuntimeException("Access denied");
         }
 
@@ -150,9 +162,20 @@ public class BudgetGoalService {
         return deleted;
     }
     /**
+     * Reacts to ExpenceService publishing ExpenseCreatedEvent - decoupled from
+     * a direct method call so ExpenceService doesn't need to depend on this service.
+     */
+    @EventListener
+    public void onExpenseCreated(ExpenseCreatedEvent event) {
+        String warning = checkBudgetStatus(event.getCategoryId(), event.getProfileId());
+        if (warning != null) {
+            log.info("Budget warning for profile {}: {}", event.getProfileId(), warning);
+        }
+    }
+
+    /**
      * Check budget status after adding an expense.
      * Returns warning message if near or over budget.
-     * Called from ExpenceService after adding expense.
      */
     public String checkBudgetStatus(Long categoryId, Long profileId) {
         YearMonth current = YearMonth.now();
@@ -211,17 +234,19 @@ public class BudgetGoalService {
         int copied = 0;
         for (BudgetGoalEntity old : previousBudgets) {
             // Check if budget already exists for new month
-            Optional<BudgetGoalEntity> existing = old.getCategoryId() != null
+            Long oldCategoryId = old.getCategory() != null ? old.getCategory().getId() : null;
+            Long oldProfileId = old.getProfile().getId();
+            Optional<BudgetGoalEntity> existing = oldCategoryId != null
                     ? budgetGoalRepository.findByProfileIdAndCategoryIdAndMonthAndYear(
-                            old.getProfileId(), old.getCategoryId(),
+                            oldProfileId, oldCategoryId,
                             current.getMonthValue(), current.getYear())
                     : budgetGoalRepository.findByProfileIdAndCategoryIdIsNullAndMonthAndYear(
-                            old.getProfileId(), current.getMonthValue(), current.getYear());
+                            oldProfileId, current.getMonthValue(), current.getYear());
 
             if (existing.isEmpty()) {
                 BudgetGoalEntity newBudget = BudgetGoalEntity.builder()
-                        .profileId(old.getProfileId())
-                        .categoryId(old.getCategoryId())
+                        .profile(old.getProfile())
+                        .category(old.getCategory())
                         .month(current.getMonthValue())
                         .year(current.getYear())
                         .budgetAmount(old.getBudgetAmount())
@@ -239,13 +264,16 @@ public class BudgetGoalService {
 
     /**
      * Scheduled job: Send alerts for budgets near limit.
-     * Runs every day at 9 PM IST.
+     * Runs every hour; each profile is only alerted during its preferred
+     * notification hour (default 9 PM IST if not set), so this behaves the
+     * same as a fixed daily 9 PM job for anyone who hasn't customized it.
      */
-    @Scheduled(cron = "0 0 21 * * *", zone = "Asia/Kolkata")
+    @Scheduled(cron = "0 0 * * * *", zone = "Asia/Kolkata")
     @Transactional
     public void sendBudgetAlerts() {
         log.info("Running budget alert job...");
         YearMonth current = YearMonth.now();
+        int currentHour = java.time.LocalTime.now(java.time.ZoneId.of("Asia/Kolkata")).getHour();
 
         List<BudgetGoalEntity> budgets = budgetGoalRepository
                 .findBudgetsNeedingAlert(current.getMonthValue(), current.getYear());
@@ -253,12 +281,18 @@ public class BudgetGoalService {
         int alertsSent = 0;
         for (BudgetGoalEntity budget : budgets) {
             try {
-                BudgetGoalDTO dto = toBudgetGoalDTOForProfile(budget, budget.getProfileId());
+                BudgetGoalDTO dto = toBudgetGoalDTOForProfile(budget, budget.getProfile().getId());
 
                 if (dto.getIsNearLimit() || dto.getIsOverBudget()) {
                     // Get profile email
-                    ProfileEntity profile = profileRepository.findById(budget.getProfileId())
+                    ProfileEntity profile = profileRepository.findById(budget.getProfile().getId())
                             .orElse(null);
+
+                    int preferredHour = profile != null && profile.getNotificationTime() != null
+                            ? profile.getNotificationTime().getHour() : DEFAULT_ALERT_HOUR;
+                    if (preferredHour != currentHour) {
+                        continue; // not this profile's preferred hour yet - retry next hour
+                    }
 
                     if (profile != null && profile.getEmail() != null) {
                         // Send email alert
@@ -267,7 +301,7 @@ public class BudgetGoalService {
                                 : "⚠️ Budget Alert: " + dto.getCategoryName();
 
                         String body = buildBudgetAlertEmail(dto, profile.getFullname());
-                        emailService.sendEmail(profile.getEmail(), subject, body);
+                        emailMessageProducer.send(profile.getEmail(), subject, body);
 
                         budget.setAlertSent(true);
                         budgetGoalRepository.save(budget);
@@ -306,7 +340,7 @@ public class BudgetGoalService {
         // Pick latest recurring budget per category (null category = overall budget)
         Map<Long, BudgetGoalEntity> latestByCategory = new java.util.HashMap<>();
         for (BudgetGoalEntity b : recurringBudgets) {
-            Long key = b.getCategoryId(); // null means overall budget
+            Long key = b.getCategory() != null ? b.getCategory().getId() : null; // null means overall budget
             BudgetGoalEntity existing = latestByCategory.get(key);
 
             if (existing == null || isNewerBudget(b, existing)) {
@@ -314,10 +348,13 @@ public class BudgetGoalService {
             }
         }
 
+        ProfileEntity profileEntityForInit = profileRepository.findById(profileId)
+                .orElseThrow(() -> new RuntimeException("Profile not found"));
+
         for (BudgetGoalEntity template : latestByCategory.values()) {
             BudgetGoalEntity newBudget = BudgetGoalEntity.builder()
-                    .profileId(profileId)
-                    .categoryId(template.getCategoryId())
+                    .profile(profileEntityForInit)
+                    .category(template.getCategory())
                     .month(current.getMonthValue())
                     .year(current.getYear())
                     .budgetAmount(template.getBudgetAmount())
@@ -347,7 +384,7 @@ public class BudgetGoalService {
      * Convert entity to DTO with calculated progress for current user.
      */
     private BudgetGoalDTO toBudgetGoalDTO(BudgetGoalEntity entity) {
-        return toBudgetGoalDTOForProfile(entity, entity.getProfileId());
+        return toBudgetGoalDTOForProfile(entity, entity.getProfile().getId());
     }
 
     /**
@@ -360,17 +397,18 @@ public class BudgetGoalService {
 
         BigDecimal spentAmount;
         String categoryName;
+        Long entityCategoryId = entity.getCategory() != null ? entity.getCategory().getId() : null;
 
-        if (entity.getCategoryId() != null) {
+        if (entityCategoryId != null) {
             // Category-specific budget
             spentAmount = expenceRepository
                     .findByProfileIdAndCategoryIdAndDateBetween(
-                            profileId, entity.getCategoryId(), startOfMonth, endOfMonth)
+                            profileId, entityCategoryId, startOfMonth, endOfMonth)
                     .stream()
                     .map(ExpenceEntity::getAmount)
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
 
-            categoryName = categoryRepository.findById(entity.getCategoryId())
+            categoryName = categoryRepository.findById(entityCategoryId)
                     .map(CategoryEntity::getName)
                     .orElse("Unknown");
         } else {
@@ -392,7 +430,7 @@ public class BudgetGoalService {
 
         return BudgetGoalDTO.builder()
                 .id(entity.getId())
-                .categoryId(entity.getCategoryId())
+                .categoryId(entityCategoryId)
                 .categoryName(categoryName)
                 .month(entity.getMonth())
                 .year(entity.getYear())

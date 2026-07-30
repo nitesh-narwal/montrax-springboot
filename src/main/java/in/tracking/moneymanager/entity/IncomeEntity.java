@@ -43,6 +43,9 @@ public class IncomeEntity {
     @Column(name = "date", nullable = false)
     private LocalDate date;
 
+    @Column(name = "attachment_url", length = 500)
+    private String attachmentUrl;
+
     @Column(name = "created_at", updatable = false, nullable = false)
     @CreationTimestamp
     private LocalDateTime createdAt;

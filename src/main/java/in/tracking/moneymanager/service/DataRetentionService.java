@@ -4,6 +4,7 @@ import in.tracking.moneymanager.entity.ProfileEntity;
 import in.tracking.moneymanager.entity.SubscriptionEntity;
 import in.tracking.moneymanager.entity.SubscriptionPlanEntity;
 import in.tracking.moneymanager.repository.*;
+import in.tracking.moneymanager.service.messaging.EmailMessageProducer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -36,7 +37,7 @@ public class DataRetentionService {
     private final ExpenceRepository expenceRepository;
     private final IncomeRepository incomeRepository;
     private final BankTransactionRepository bankTransactionRepository;
-    private final EmailService emailService;
+    private final EmailMessageProducer emailMessageProducer;
 
     // Default retention months if not specified in plan
     private static final int DEFAULT_FREE_RETENTION_MONTHS = 3;
@@ -197,7 +198,7 @@ public class DataRetentionService {
                 retentionMonths
             );
 
-            emailService.sendEmail(profile.getEmail(), subject, body);
+            emailMessageProducer.send(profile.getEmail(), subject, body);
             log.debug("Sent data retention notification to {}", profile.getEmail());
         } catch (Exception e) {
             log.warn("Failed to send data retention notification to {}: {}", profile.getEmail(), e.getMessage());

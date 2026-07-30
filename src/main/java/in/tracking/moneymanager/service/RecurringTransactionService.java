@@ -9,6 +9,7 @@ import in.tracking.moneymanager.entity.RecurringTransactionEntity;
 import in.tracking.moneymanager.repository.CategoryRepository;
 import in.tracking.moneymanager.repository.ProfileRepository;
 import in.tracking.moneymanager.repository.RecurringTransactionRepository;
+import in.tracking.moneymanager.service.messaging.EmailMessageProducer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -39,10 +40,12 @@ public class RecurringTransactionService {
     private final ExpenceService expenceService;
     private final IncomeService incomeService;
     private final ProfileService profileService;
-    private final EmailService emailService;
+    private final EmailMessageProducer emailMessageProducer;
 
     // Max recurring transactions per user (to prevent abuse)
     private static final int MAX_RECURRING_PER_USER = 50;
+    // Default hour (24h, IST) bill reminders are sent at when the user hasn't set a preference
+    private static final int DEFAULT_REMINDER_HOUR = 9;
     // Max transactions to process per job run (to limit DB load)
     private static final int BATCH_SIZE = 100;
 
@@ -55,7 +58,7 @@ public class RecurringTransactionService {
      */
     public List<RecurringTransactionDTO> getAllRecurring() {
         ProfileEntity profile = profileService.getCurrentProfile();
-        return recurringRepo.findByProfileIdAndIsActiveTrue(profile)
+        return recurringRepo.findByProfileAndIsActiveTrue(profile)
                 .stream()
                 .map(this::toDTO)
                 .collect(Collectors.toList());
@@ -69,7 +72,7 @@ public class RecurringTransactionService {
         ProfileEntity profile = profileService.getCurrentProfile();
 
         // Check limit
-        long count = recurringRepo.countByProfileIdAndIsActiveTrue(profile);
+        long count = recurringRepo.countByProfileAndIsActiveTrue(profile);
         if (count >= MAX_RECURRING_PER_USER) {
             throw new RuntimeException("Maximum recurring transactions limit reached (" +
                     MAX_RECURRING_PER_USER + ")");
@@ -255,14 +258,17 @@ public class RecurringTransactionService {
 
     /**
      * Scheduled job: Send reminders for upcoming transactions.
-     * Runs every day at 9 AM IST.
+     * Runs every hour; each profile is only reminded during its preferred
+     * notification hour (default 9 AM IST if not set), so this behaves the
+     * same as a fixed daily 9 AM job for anyone who hasn't customized it.
      */
-    @Scheduled(cron = "0 0 9 * * *", zone = "Asia/Kolkata")
+    @Scheduled(cron = "0 0 * * * *", zone = "Asia/Kolkata")
     @Transactional
     public void sendReminders() {
         log.info("Running bill reminder job...");
         LocalDate today = LocalDate.now();
         LocalDate reminderDate = today.plusDays(3);  // Look ahead 3 days
+        int currentHour = java.time.LocalTime.now(java.time.ZoneId.of("Asia/Kolkata")).getHour();
 
         List<RecurringTransactionEntity> upcoming = recurringRepo
                 .findTransactionsNeedingReminder(today, reminderDate);
@@ -272,6 +278,12 @@ public class RecurringTransactionService {
             try {
                 // Get profile from relationship (no DB lookup needed!)
                 ProfileEntity profile = recurring.getProfile();  // ✅ Use relationship directly
+
+                int preferredHour = profile != null && profile.getNotificationTime() != null
+                        ? profile.getNotificationTime().getHour() : DEFAULT_REMINDER_HOUR;
+                if (preferredHour != currentHour) {
+                    continue; // not this profile's preferred hour yet - retry next hour
+                }
 
                 if (profile != null && profile.getEmail() != null) {
                     // Check if within reminder window
@@ -283,7 +295,7 @@ public class RecurringTransactionService {
                                 " (₹" + recurring.getAmount() + ")";
                         String body = buildReminderEmail(recurring, profile.getFullname(), daysUntil);
 
-                        emailService.sendEmail(profile.getEmail(), subject, body);
+                        emailMessageProducer.send(profile.getEmail(), subject, body);
 
                         recurring.setReminderSent(true);
                         recurring.setLastReminderSentAt(java.time.LocalDateTime.now());  // ✅ Track reminder timestamp

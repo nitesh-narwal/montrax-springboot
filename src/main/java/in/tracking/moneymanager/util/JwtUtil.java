@@ -1,39 +1,61 @@
 package in.tracking.moneymanager.util;
 
+import in.tracking.moneymanager.service.AppCacheService;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.SignatureAlgorithm;
 import io.jsonwebtoken.security.Keys;
-import org.springframework.beans.factory.annotation.Value;
+import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
 import java.security.Key;
 import java.util.Date;
+import java.util.Map;
 import java.util.function.Function;
 
 @Component
+@RequiredArgsConstructor
 public class JwtUtil {
 
-    @Value("${jwt.secret}")
-    private String secretKey;
-
-    @Value("${jwt.expiration}")
-    private long jwtExpirationMillis;
+    private final AppCacheService appCacheService;
 
     public String generateToken(String email) {
-        return Jwts.builder()
+        return generateToken(email, Map.of());
+    }
+
+    public String generateToken(String email, Map<String, Object> extraClaims) {
+        String expirationValue  = appCacheService.get("jwt.expiration", "86400000");
+        if (expirationValue == null || expirationValue.isBlank()) {
+            throw new IllegalStateException("JWT expiration value is not configured or is empty");
+        }
+        long expiration;
+        try {
+            expiration = Long.parseLong(expirationValue.trim());
+        } catch (NumberFormatException e) {
+            throw new IllegalStateException(
+                    "Invalid JWT expiration value: '" + expirationValue + "'. Must be a numeric value in milliseconds.", e
+            );
+        }
+        var builder = Jwts.builder()
                 .setSubject(email)
                 .setIssuedAt(new Date())
-                .setExpiration(new Date(System.currentTimeMillis() + jwtExpirationMillis))
-                .signWith(getSigningKey(), SignatureAlgorithm.HS256)
-                .compact();
+                .setExpiration(new Date(System.currentTimeMillis() + expiration))
+                .signWith(getSigningKey(), SignatureAlgorithm.HS256);
+
+        extraClaims.forEach(builder::claim);
+
+        return builder.compact();
     }
 
     private Key getSigningKey() {
+        String secret = appCacheService.get("jwt.secret");
+        if (secret == null || secret.isBlank()) {
+            throw new IllegalStateException("JWT_SECRET_KEY environment variable is not set or is empty");
+        }
         return Keys.hmacShaKeyFor(
-                secretKey.trim().getBytes(StandardCharsets.UTF_8)
+                secret.trim().getBytes(StandardCharsets.UTF_8)
         );
     }
 

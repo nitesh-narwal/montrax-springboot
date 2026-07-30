@@ -14,23 +14,12 @@ import in.tracking.moneymanager.repository.SubscriptionPlanRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.json.JSONObject;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.util.List;
 
-/**
- * Service for handling Razorpay payment operations.
- * Creates orders, verifies payments, and records transactions.
- *
- * Payment Flow:
- * 1. Frontend calls createOrder() to get Razorpay order
- * 2. User completes payment on Razorpay checkout
- * 3. Frontend calls verifyPayment() with callback parameters
- * 4. On success, subscription is activated
- */
 @Service
 @RequiredArgsConstructor
 @Slf4j
@@ -41,18 +30,20 @@ public class PaymentService {
     private final SubscriptionPlanRepository subscriptionPlanRepository;
     private final SubscriptionService subscriptionService;
     private final ProfileService profileService;
+    private final AppCacheService appCacheService;
 
-    // Razorpay public key (safe to expose to frontend)
-    @Value("${razorpay.key.id}")
-    private String razorpayKeyId;
+    private String getRazorpayKeyId() {
+        return appCacheService.get("razorpay.key.id");
+    }
 
-    // Razorpay key secret for signature verification (checkout)
-    @Value("${razorpay.key.secret}")
-    private String razorpayKeySecret;
+    private String getRazorpayKeySecret() {
+        return appCacheService.get("razorpay.key.secret");
+    }
 
-    // Webhook secret for verifying Razorpay webhooks (optional, different from key secret)
-    @Value("${razorpay.webhook.secret:${razorpay.key.secret}}")
-    private String webhookSecret;
+    private String getWebhookSecret() {
+        String secret = appCacheService.get("razorpay.webhook.secret");
+        return secret != null ? secret : getRazorpayKeySecret();
+    }
 
     /**
      * Create a Razorpay order for subscription purchase by plan NAME.
@@ -131,7 +122,7 @@ public class PaymentService {
                 .orderId(orderId)
                 .amount(price)
                 .currency("INR")
-                .razorpayKeyId(razorpayKeyId)
+                .razorpayKeyId(getRazorpayKeyId())
                 .planName(plan.getName())
                 .billingCycle(billingCycle)
                 .build();
@@ -187,7 +178,7 @@ public class PaymentService {
 
             // Verify signature using Razorpay utility (MUST use key secret, not webhook secret)
             boolean isValid = Utils.verifySignature(data, verifyDTO.getRazorpaySignature(),
-                    razorpayKeySecret);
+                    getRazorpayKeySecret());
 
             if (!isValid) {
                 log.error("Payment signature verification failed for order: {}. Data: {}",
@@ -239,7 +230,7 @@ public class PaymentService {
      */
     public List<PaymentHistoryEntity> getPaymentHistory() {
         ProfileEntity profile = profileService.getCurrentProfile();
-        return paymentHistoryRepository.findByProfileIdOrderByCreatedAtDesc(profile);
+        return paymentHistoryRepository.findByProfileOrderByCreatedAtDesc(profile);
     }
 
     /**
@@ -274,7 +265,7 @@ public class PaymentService {
     public int deleteAllPaymentHistory() {
         ProfileEntity currentProfile = profileService.getCurrentProfile();
         List<PaymentHistoryEntity> payments = paymentHistoryRepository
-                .findByProfileIdOrderByCreatedAtDesc(currentProfile);  // ✅ Use ProfileEntity
+                .findByProfileOrderByCreatedAtDesc(currentProfile);  // ✅ Use ProfileEntity
 
         int deleted = 0;
         for (PaymentHistoryEntity payment : payments) {
@@ -297,7 +288,7 @@ public class PaymentService {
     public int clearAllPaymentHistory() {
         ProfileEntity currentProfile = profileService.getCurrentProfile();
         List<PaymentHistoryEntity> payments = paymentHistoryRepository
-                .findByProfileIdOrderByCreatedAtDesc(currentProfile);  // ✅ Use ProfileEntity
+                .findByProfileOrderByCreatedAtDesc(currentProfile);  // ✅ Use ProfileEntity
 
         int count = payments.size();
         paymentHistoryRepository.deleteAll(payments);

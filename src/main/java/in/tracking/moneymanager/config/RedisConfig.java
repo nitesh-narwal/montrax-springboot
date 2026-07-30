@@ -1,8 +1,12 @@
 package in.tracking.moneymanager.config;
 
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.cache.Cache;
 import org.springframework.cache.CacheManager;
+import org.springframework.cache.annotation.CachingConfigurer;
 import org.springframework.cache.annotation.EnableCaching;
+import org.springframework.cache.interceptor.CacheErrorHandler;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.cache.RedisCacheConfiguration;
@@ -31,9 +35,47 @@ import java.time.Duration;
  * - predictions: 6 hours (computed from historical data)
  * - anomalies: 30 minutes (recent data)
  */
+@Slf4j
 @Configuration
 @EnableCaching
-public class RedisConfig {
+public class RedisConfig implements CachingConfigurer {
+
+    /**
+     * Stale or incompatible cache entries (e.g. left over from a serializer change)
+     * must not break the request - log and fall through to the DB/service instead.
+     */
+    @Override
+    public CacheErrorHandler errorHandler() {
+        return new CacheErrorHandler() {
+            @Override
+            public void handleCacheGetError(RuntimeException exception, Cache cache, Object key) {
+                log.warn("Cache GET failed for cache '{}' key '{}': {}", cache.getName(), key, exception.getMessage());
+                // Entry is undeserializable (stale shape from a previous DTO/serializer change) -
+                // evict it now so the next request repopulates instead of failing until TTL expiry.
+                try {
+                    cache.evict(key);
+                } catch (RuntimeException evictException) {
+                    log.warn("Failed to evict broken cache entry for cache '{}' key '{}': {}",
+                            cache.getName(), key, evictException.getMessage());
+                }
+            }
+
+            @Override
+            public void handleCachePutError(RuntimeException exception, Cache cache, Object key, Object value) {
+                log.warn("Cache PUT failed for cache '{}' key '{}': {}", cache.getName(), key, exception.getMessage());
+            }
+
+            @Override
+            public void handleCacheEvictError(RuntimeException exception, Cache cache, Object key) {
+                log.warn("Cache EVICT failed for cache '{}' key '{}': {}", cache.getName(), key, exception.getMessage());
+            }
+
+            @Override
+            public void handleCacheClearError(RuntimeException exception, Cache cache) {
+                log.warn("Cache CLEAR failed for cache '{}': {}", cache.getName(), exception.getMessage());
+            }
+        };
+    }
 
     @Value("${spring.data.redis.host}")
     private String redisHost;

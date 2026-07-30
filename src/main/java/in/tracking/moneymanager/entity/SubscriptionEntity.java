@@ -98,4 +98,8 @@ public class SubscriptionEntity {
     public void preUpdate() {
         this.updatedAt = LocalDateTime.now();
     }
+
+    public Long getPlanId() {
+        return plan.getId();
+    }
 }

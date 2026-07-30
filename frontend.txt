@@ -1,10 +1,7 @@
-I'll continue and complete the comprehensive documentation for your Money Manager backend project. Let me create the full documentation in a structured format.Let me continue creating the comprehensive documentation for your Money Manager backend project. I'll break this into structured sections:
-
----
-
 # 💰 Money Manager - Backend API Documentation
 
-## Production-Level Technical Documentation v1.0
+## Production-Level Technical Documentation v1.1
+### This file is meant to be handed to an AI (or a developer) to build the frontend. Read it top to bottom once; it's written to be simple, not clever.
 
 ---
 
@@ -23,6 +20,29 @@ I'll continue and complete the comprehensive documentation for your Money Manage
 
 ---
 
+## What's new since the last frontend build (read this first, in plain language)
+
+- **Sign-up now needs a phone number.** After registering, the user must enter an
+  SMS OTP code before they're allowed to log in. Build an OTP-entry screen. See
+  section 4.1 (`POST /register`, `POST /api/otp/verify`).
+- **"Sign in with Google" is available.** It's a page redirect, not a normal API
+  call — see "Google Sign-In (OAuth2)" in section 4.1.
+- **Some users are admins now.** A logged-in admin can see a `/api/admin/**`
+  panel (user list, role management, system stats, config editor). Regular users
+  never see this. See sections 3.9 and 4.17.
+- **Big lists are paginated.** Expense/income history and filtered search now have
+  `/paged` endpoint variants that return `{ content, currentPage, totalPages, ... }`
+  instead of a raw array. Use these for any table/list UI. See section 4.16.
+- **The API can rate-limit you (HTTP 429)** and **supports safe retries via an
+  `X-Idempotency-Key` header.** Both are just things your HTTP client layer should
+  handle generically — see sections 3.7 and 3.8.
+- **Emails now send in the background** (via a queue) instead of blocking the
+  request — no frontend change needed, requests just return faster.
+- **The database is PostgreSQL** — none of this affects the frontend either way,
+  the API contracts below are the same regardless of what's behind them.
+
+---
+
 # 1. System Overview
 
 ## 1.1 What This System Does
@@ -35,13 +55,19 @@ Money Manager is a personal finance tracking application that helps users:
 - Get AI-powered financial insights
 - Receive automated reminders for recurring payments
 - View analytics and spending trends
+- Sign up with phone OTP verification, or sign in instantly with Google
+- (Admins only) manage users and system settings from an admin panel
 
 ### Technical Terms
 A multi-tier Spring Boot REST API application featuring:
-- JWT-based stateless authentication
+- JWT-based stateless authentication, with Google OAuth2 as an alternative login method
+- Role-based access control (USER / ADMIN)
 - Multi-database architecture (PostgreSQL + MongoDB + Redis)
 - AI integration via Google Gemini API
 - Payment gateway integration (Razorpay)
+- SMS OTP verification via Twilio
+- Async processing via RabbitMQ (emails) and Kafka (transaction/audit event streaming)
+- Per-user, per-tier rate limiting and idempotent request handling
 - Scheduled background jobs for automation
 - Subscription-based feature gating with AOP
 
@@ -359,6 +385,9 @@ HMACSHA256(base64(header) + "." + base64(payload), SECRET_KEY)
 | `POST /reset-password` | ❌ No | Password reset |
 | `GET /validate-reset-token` | ❌ No | Validate reset token |
 | `GET /api/subscription/plans` | ❌ No | List pricing plans |
+| `POST /api/otp/**` | ❌ No | Send/resend/verify phone OTP |
+| `GET /oauth2/**`, `/login/oauth2/**` | ❌ No | Google sign-in redirect flow |
+| `GET /api/admin/**` | 🔒 ADMIN role | Admin panel — needs role=ADMIN in the JWT, not just any valid token |
 | **All other endpoints** | ✅ Yes | Requires valid JWT |
 
 ## 3.5 Subscription-Based Access Control
@@ -415,9 +444,54 @@ Controller Method with @PremiumFeature
 | CORS Configuration | Whitelist specific origins |
 | CSRF Protection | Disabled (stateless API) |
 | Token Expiration | Configurable via `jwt.expiration` |
-| Rate Limiting | Gemini API calls limited |
+| Rate Limiting | Per-user, per-hour, tier-based (see 3.7) |
+| Idempotency | `X-Idempotency-Key` header (see 3.8) |
 | Input Validation | DTO validation + service checks |
 | SQL Injection | Spring Data JPA parameterized queries |
+
+## 3.7 Rate Limiting (applies to every authenticated endpoint)
+
+```
+Every JWT-authenticated request counts against the user's hourly quota, based on
+their subscription tier:
+  FREE = 100 requests/hour, BASIC = 500/hour, PREMIUM = 2000/hour, ADMIN = unlimited
+
+When the limit is exceeded, backend returns:
+
+Response (429 Too Many Requests):
+{
+  "message": "Rate limit exceeded. Try again later.",
+  ...
+}
+Header: Retry-After: 3600
+
+FRONTEND TODO: add a global fetch/axios interceptor that catches 429s and shows a
+"You're doing that too much, try again in a bit" toast using the Retry-After header
+(seconds) to tell the user roughly when to retry. Don't auto-retry in a loop.
+```
+
+## 3.8 Idempotency (optional, use for POST/PUT that create/charge something)
+
+```
+Send an `X-Idempotency-Key` header (any unique string you generate, e.g. crypto.randomUUID())
+on a POST/PUT and the backend caches the response for 24 hours. If the exact same request is
+sent again with the same key (e.g. user double-clicks "Pay" or a retry fires after a flaky
+network), the backend replays the ORIGINAL response instead of doing the action twice.
+
+FRONTEND TODO: generate a fresh UUID per "logical action" (e.g. once when a payment form is
+opened) and reuse it if you retry that same submission — not a new UUID per retry.
+Most useful on: POST /api/payments/create-order, POST /expences, POST /incomes.
+```
+
+## 3.9 Roles & Admin Panel
+
+```
+Every profile has a role: "USER" (default) or "ADMIN". The JWT now carries the role as a
+claim. Admin-only endpoints live under /api/admin/** and return 403 for non-admins.
+There's no self-serve way to become admin — the first admin account is seeded from
+server-side env vars on startup. Frontend should hide any admin UI unless
+user.role === "ADMIN" (from the /login or /profile response).
+```
 
 ---
 
@@ -426,14 +500,15 @@ Controller Method with @PremiumFeature
 ## 4.1 Authentication Endpoints
 
 ### POST /register
-**Creates a new user account**
+**Creates a new user account. Phone number + OTP verification is now REQUIRED — a user cannot log in until they verify the OTP sent to their phone.**
 
 ```
 Request:
 {
   "fullname": "John Doe",
   "email": "john@example.com",
-  "password": "securePassword123"
+  "password": "securePassword123",
+  "phoneNumber": "+919876543210"
 }
 
 Response (201 Created):
@@ -442,6 +517,10 @@ Response (201 Created):
   "fullname": "John Doe",
   "email": "john@example.com",
   "profileImageUrl": null,
+  "role": "USER",
+  "phoneNumber": "+919876543210",
+  "isPhoneVerified": false,
+  "authProvider": "LOCAL",
   "createdAt": "2026-04-18T10:30:00",
   "updatedAt": "2026-04-18T10:30:00"
 }
@@ -450,19 +529,25 @@ Validation Rules:
 - email: Required, valid email format, unique
 - password: Required, min 8 characters recommended
 - fullname: Required
+- phoneNumber: Required (E.164 format recommended, e.g. +919876543210) — registration fails without it
 
 Internal Flow:
 1. Check if email already exists → throw if duplicate
-2. Hash password with BCrypt
-3. Generate UUID activation token
-4. Save profile with isActive=false
-5. Send activation email asynchronously
-6. Return profile DTO (without password)
+2. Require phoneNumber → throw if missing/blank
+3. Hash password with BCrypt
+4. Generate UUID activation token, save profile with isActive=false, isPhoneVerified=false
+5. Send activation email asynchronously (via RabbitMQ, doesn't block the response)
+6. Send a 6-digit OTP by SMS to phoneNumber (Twilio) — best-effort, user can resend via /api/otp/resend
+7. Return profile DTO (without password)
+
+FRONTEND FLOW: after register succeeds, immediately show an "enter the OTP we texted you" screen,
+call POST /api/otp/verify, THEN let the user log in. Login will be rejected with 403 until this is done.
+See "OTP Verification Endpoints" below.
 ```
 
 
 ### POST /login
-**Authenticates user and returns JWT**
+**Authenticates user and returns JWT. Blocked with 403 until the phone number is OTP-verified.**
 
 ```
 Request:
@@ -479,6 +564,10 @@ Response (200 OK):
     "fullname": "John Doe",
     "email": "john@example.com",
     "profileImageUrl": "https://cloudinary.com/...",
+    "role": "USER",
+    "phoneNumber": "+919876543210",
+    "isPhoneVerified": true,
+    "authProvider": "LOCAL",
     "createdAt": "2026-04-18T10:30:00",
     "updatedAt": "2026-04-18T10:30:00"
   }
@@ -489,22 +578,82 @@ Response (401 Unauthorized):
   "message": "Invalid email or password"
 }
 
-Response (403 Forbidden):
+Response (403 Forbidden) - account not activated (email link not clicked):
 {
   "message": "Account is not activated."
 }
 
+Response (403 Forbidden) - phone not OTP-verified yet:
+"Phone verification required. Please verify the OTP sent to your phone before logging in."
+
 Status Codes:
 - 200: Success
 - 401: Invalid credentials
-- 403: Account not activated
+- 403: Account not activated OR phone not verified (check the message body to tell them apart)
 
 Internal Flow:
 1. Check if account has pending deletion → cancel deletion if login succeeds
-2. Authenticate via AuthenticationManager
-3. Check if account is active
-4. Generate JWT token with email as subject
-5. Return token + user profile
+2. Check isPhoneVerified → reject with 403 if false (checked BEFORE password auth)
+3. Authenticate via AuthenticationManager
+4. Check if account is active
+5. Generate JWT token — now embeds a "role" claim (USER/ADMIN) alongside the email subject
+6. Return token + user profile (includes role/phoneNumber/isPhoneVerified/authProvider)
+
+IMPORTANT for frontend: every JSON POST/PUT request can optionally carry an
+`X-Idempotency-Key` header (any unique string, e.g. a UUID you generate client-side)
+to make retries safe — see "Idempotency" in section 3. And watch for HTTP 429
+responses on ANY endpoint — see "Rate Limiting" in section 3 — they mean the user's
+plan-tier hourly limit was hit; show the `Retry-After` header value to the user.
+```
+
+
+### Google Sign-In (OAuth2) — alternative to email/password login
+
+```
+This is a browser REDIRECT flow, not a JSON API call — do not fetch() it, navigate the browser to it.
+
+1. Frontend redirects the whole page to:
+     GET {backend-base-url}/oauth2/authorization/google
+2. Backend sends the browser to Google's consent screen, user approves.
+3. Google redirects back to the backend, which creates the profile if it's a first-time
+   Google user (isActive=true, isPhoneVerified=true automatically — Google already verified
+   the person, so no OTP step for Google accounts) or matches an existing profile by email.
+4. Backend issues the SAME kind of JWT as POST /login, then redirects the browser to:
+     {frontend-url}/oauth2/redirect?token=eyJhbGciOiJIUzI1NiJ9...
+5. Frontend's /oauth2/redirect route reads the `token` query param, stores it exactly like
+   a normal login token, then calls GET /profile (or similar) to fetch the user object.
+6. On failure, backend redirects to {frontend-url}/login?error=<message> instead.
+
+FRONTEND TODO: add a "Sign in with Google" button that does
+`window.location.href = \`${BACKEND_URL}/oauth2/authorization/google\`` and a
+`/oauth2/redirect` route that extracts `?token=` and finishes login client-side.
+
+A profile created via Google login has authProvider="GOOGLE" and no password —
+don't show a "change password" option for those accounts unless you also add a
+"set a password" flow (not implemented on the backend).
+```
+
+
+### OTP Verification Endpoints (all public, no auth needed)
+
+```
+POST /api/otp/send
+Request: { "phoneNumber": "+919876543210" }
+Response (200 OK): { "success": true, "message": "OTP sent" }
+Response (429 Too Many Requests): if called again within 60 seconds of the last send
+
+POST /api/otp/resend
+Same request/response shape as /send — use this on a "Resend OTP" button.
+
+POST /api/otp/verify
+Request: { "phoneNumber": "+919876543210", "code": "123456" }
+Response (200 OK): { "success": true, "message": "Phone verified" }
+Response (400 Bad Request): wrong code (max 5 attempts before the OTP is invalidated)
+
+Rules:
+- OTP is 6 digits, expires after 5 minutes
+- Max 5 wrong-code attempts before the code is locked out (user must request a new one)
+- On success, backend sets isPhoneVerified=true on the profile — login then works
 ```
 
 
@@ -1580,6 +1729,76 @@ Response (200 OK):
 ]
 ```
 
+### POST /filter/paged
+Same request body as above, but also takes standard pagination query params
+(`page`, `size`, `sort`) and returns a `PagedResponse` instead of a raw array —
+see "Pagination" note under 4.16 for the exact response shape. Use this one for
+any UI with more than ~50 transactions; the plain /filter endpoint returns everything
+at once and doesn't scale.
+
+---
+
+## 4.16 Pagination (Expenses & Income history)
+
+```
+Two new paginated endpoints exist alongside the original unpaginated ones
+(originals are kept for backward compatibility, but prefer the paged ones for
+any list/table UI):
+
+GET /expences/paged?page=0&size=20&sort=date,desc
+GET /incomes/paged?page=0&size=20&sort=date,desc
+
+Response (200 OK) — PagedResponse<T> shape, same wrapper used by /filter/paged
+and GET /api/bank/transactions:
+{
+  "content": [ { ...same shape as GET /expences/all items... } ],
+  "currentPage": 0,
+  "totalPages": 5,
+  "totalElements": 97,
+  "size": 20,
+  "hasNext": true,
+  "hasPrevious": false
+}
+
+FRONTEND TODO: build a reusable <PaginatedTable> / infinite-scroll component around
+this shape — it's used identically across expenses, income, filter results, and
+bank-import transactions.
+
+Note: Category, Recurring Transaction, and Budget Goal lists are intentionally NOT
+paginated — those lists are small per user (a handful of categories/budgets), so
+they still return plain arrays via their original endpoints.
+```
+
+## 4.17 Admin Endpoints (require role=ADMIN — see 3.9)
+
+```
+GET /api/admin/users?page=0&size=20&search=john
+  → PagedResponse of user summaries: { id, fullname, email, role, isActive,
+    isPhoneVerified, createdAt }. `search` matches fullname or email (optional).
+
+PUT /api/admin/users/{id}/role
+  Request: { "role": "ADMIN" }   // or "USER"
+  → Promotes/demotes a user. Blocked (400) if you try to demote yourself.
+
+GET /api/admin/stats
+  → System-wide counts: total users, active users, phone-verified users,
+    breakdown by role, etc. Good source for an admin dashboard's summary cards.
+
+POST /api/admin/cache/refresh
+  → Force-reloads server config from the database (normally auto-refreshes every
+    30 min). Useful as a "flush config cache" button after changing settings below.
+
+GET /api/admin/config
+GET /api/admin/config?category=email        (optional filter)
+PUT /api/admin/config/{key}
+  Request: { "value": "new-value" }
+  → Read/write server-side runtime config (things like the frontend URL used in
+    emails, feature toggles). This is how ops changes settings without a redeploy.
+
+FRONTEND TODO: an admin section with a user table (search + role dropdown per row),
+a stats dashboard, and a simple key/value config editor. Gate the whole section
+behind `user.role === "ADMIN"`.
+```
 
 ---
 
@@ -1589,7 +1808,7 @@ Response (200 OK):
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                           POSTGRESQL SCHEMA                                  │
+│                           ORACLE DB SCHEMA                                  │
 └─────────────────────────────────────────────────────────────────────────────┘
 
                               ┌──────────────────┐
@@ -2577,7 +2796,7 @@ stores/
 
 | Variable | Description | Required |
 |----------|-------------|----------|
-| `DATABASE_URL` | PostgreSQL connection URL | Yes |
+| `DB_URI` | PostgreSQL connection URL | Yes |
 | `MONGODB_URI` | MongoDB connection URI | No |
 | `REDIS_HOST` | Redis server host | Yes |
 | `REDIS_PORT` | Redis server port | Yes |

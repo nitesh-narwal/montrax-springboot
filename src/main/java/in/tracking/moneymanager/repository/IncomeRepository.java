@@ -1,6 +1,8 @@
 package in.tracking.moneymanager.repository;
 
 import in.tracking.moneymanager.entity.IncomeEntity;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
@@ -14,6 +16,17 @@ public interface IncomeRepository extends JpaRepository<IncomeEntity, Long> {
 
     //select * from tbl_income where profile_id = ?1 order by date desc
     List<IncomeEntity> findByProfileIdOrderByDateDesc(Long profileId);
+
+    // Paginated transaction history
+    Page<IncomeEntity> findByProfileId(Long profileId, Pageable pageable);
+
+    Page<IncomeEntity> findByProfileIdAndDateBetweenAndNameContainingIgnoreCase(
+            Long profileId,
+            LocalDate startDate,
+            LocalDate endDate,
+            String keyword,
+            Pageable pageable
+    );
 
     //select * from tbl_income where profile_id = ?1 order by date desc limit 5
     List<IncomeEntity> findTop5ByProfileIdOrderByDateDesc(Long profileId);

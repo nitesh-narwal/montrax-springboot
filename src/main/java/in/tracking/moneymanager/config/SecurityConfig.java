@@ -1,9 +1,15 @@
 package in.tracking.moneymanager.config;
 
+import in.tracking.moneymanager.security.AuditFilter;
+import in.tracking.moneymanager.security.IdempotencyFilter;
 import in.tracking.moneymanager.security.JwtRequestFilter;
+import in.tracking.moneymanager.security.OAuth2LoginFailureHandler;
+import in.tracking.moneymanager.security.OAuth2LoginSuccessHandler;
+import in.tracking.moneymanager.security.RateLimitFilter;
+import in.tracking.moneymanager.service.AppCacheService;
 import in.tracking.moneymanager.service.AppUserDetailsService;
+import in.tracking.moneymanager.service.CustomOAuth2UserService;
 import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.authentication.AuthenticationManager;
@@ -29,9 +35,13 @@ public class SecurityConfig {
     private final AppUserDetailsService appUserDetailsService;
     private final AuthenticationConfiguration authenticationConfiguration;
     private final JwtRequestFilter jwtRequestFilter;
-
-    @Value("${money.manager.frontend.url}")
-    private String frontendUrl;
+    private final RateLimitFilter rateLimitFilter;
+    private final IdempotencyFilter idempotencyFilter;
+    private final AuditFilter auditFilter;
+    private final AppCacheService appCacheService;
+    private final CustomOAuth2UserService customOAuth2UserService;
+    private final OAuth2LoginSuccessHandler oAuth2LoginSuccessHandler;
+    private final OAuth2LoginFailureHandler oAuth2LoginFailureHandler;
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity httpSecurity) throws Exception {
@@ -46,10 +56,23 @@ public class SecurityConfig {
                         .requestMatchers("/forgot-password", "/reset-password", "/validate-reset-token").permitAll()
                         // Subscription plans - public for pricing page
                         .requestMatchers("/api/subscription/plans").permitAll()
+                        // OTP endpoints - public, used during registration before login
+                        .requestMatchers("/api/otp/**").permitAll()
+                        // OAuth2 login (Google) - public, browser redirect flow
+                        .requestMatchers("/oauth2/**", "/login/oauth2/**").permitAll()
+                        // Admin panel - ADMIN role required
+                        .requestMatchers("/api/admin/**").hasRole("ADMIN")
                         // All other requests require authentication
                         .anyRequest().authenticated())
                         .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-                        .addFilterBefore(jwtRequestFilter, UsernamePasswordAuthenticationFilter.class);
+                        .oauth2Login(oauth2 -> oauth2
+                                .userInfoEndpoint(userInfo -> userInfo.userService(customOAuth2UserService))
+                                .successHandler(oAuth2LoginSuccessHandler)
+                                .failureHandler(oAuth2LoginFailureHandler))
+                        .addFilterBefore(jwtRequestFilter, UsernamePasswordAuthenticationFilter.class)
+                        .addFilterAfter(rateLimitFilter, JwtRequestFilter.class)
+                        .addFilterAfter(idempotencyFilter, RateLimitFilter.class)
+                        .addFilterAfter(auditFilter, IdempotencyFilter.class);
         return httpSecurity.build();
     }
 
@@ -62,6 +85,7 @@ public class SecurityConfig {
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration corsConfiguration = new CorsConfiguration();
         // Allow frontend origins
+        String frontendUrl = appCacheService.get("money.manager.frontend.url", "http://localhost:5173");
         corsConfiguration.setAllowedOriginPatterns(List.of(
                 frontendUrl,
                 "http://localhost:5173",
@@ -72,7 +96,7 @@ public class SecurityConfig {
                 "*"
         ));
         corsConfiguration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"));
-        corsConfiguration.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With"));
+        corsConfiguration.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With", "X-Idempotency-Key"));
         corsConfiguration.setExposedHeaders(List.of("Authorization"));
         corsConfiguration.setAllowCredentials(true);
         corsConfiguration.setMaxAge(3600L);

@@ -88,7 +88,8 @@ public class SubscriptionPlanEntity {
     private Boolean isActive = true;
 
     // Display order for listing plans
-    @Column(name = "display_order", nullable = false)
+    //@Column(name = "display_order", nullable = false)
+    @Column(name = "display_order")
     @Builder.Default
     private Integer displayOrder = 0;
 
@@ -98,7 +99,8 @@ public class SubscriptionPlanEntity {
     private LocalDateTime createdAt;
 
     // Timestamp when plan was last updated
-    @Column(name = "updated_at", nullable = false)
+    // @Column(name = "updated_at", nullable = false)
+    @Column(name = "updated_at")
     private LocalDateTime updatedAt;
 
     @PreUpdate

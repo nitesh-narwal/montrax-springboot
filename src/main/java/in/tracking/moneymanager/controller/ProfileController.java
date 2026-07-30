@@ -7,6 +7,8 @@ import in.tracking.moneymanager.dto.ResetPasswordDTO;
 import in.tracking.moneymanager.service.CloudinaryService;
 import in.tracking.moneymanager.service.ProfileService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.BadCredentialsException;
@@ -17,10 +19,14 @@ import java.util.Map;
 
 @RestController
 @RequiredArgsConstructor
+@Slf4j
 public class ProfileController {
+
+    private static final String OAUTH2_EXCHANGE_KEY_PREFIX = "oauth2_exchange:";
 
     private final ProfileService profileService;
     private final CloudinaryService cloudinaryService;
+    private final RedisTemplate<String, Object> redisTemplate;
 
     @PostMapping("/register")
     public ResponseEntity<ProfileDTO> registerProfile(@RequestBody ProfileDTO profileDTO) {
@@ -58,9 +64,6 @@ public class ProfileController {
     @PostMapping("/login")
     public ResponseEntity<Map<String, Object>> login(@RequestBody AuthDTO authDTO) {
         try {
-            System.out.println("Account active: " +
-                    profileService.isAccountActive(authDTO.getEmail()));
-
             Map<String, Object> response =
                     profileService.authenticateAndGenerateToken(authDTO);
 
@@ -74,10 +77,39 @@ public class ProfileController {
         } catch (BadCredentialsException e) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                     .body(Map.of("message", "Invalid email or password"));
+        } catch (org.springframework.web.server.ResponseStatusException e) {
+            return ResponseEntity.status(e.getStatusCode())
+                    .body(Map.of("message", e.getReason()));
         } catch (Exception e) {
+            log.error("Unexpected error during login for {}", authDTO.getEmail(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of("message", "Login failed"));
         }
+    }
+
+    /**
+     * Exchanges a one-time OAuth2 login code (issued via the /oauth2/redirect
+     * query param) for the real JWT. Single-use and short-lived (60s) so the
+     * actual bearer token never appears in a URL, browser history, or logs.
+     *
+     * POST /oauth2/exchange
+     */
+    @PostMapping("/oauth2/exchange")
+    public ResponseEntity<Map<String, Object>> exchangeOAuth2Code(@RequestBody Map<String, String> request) {
+        String code = request.get("code");
+        if (code == null || code.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("message", "Missing code"));
+        }
+
+        String key = OAUTH2_EXCHANGE_KEY_PREFIX + code;
+        Object token = redisTemplate.opsForValue().get(key);
+        if (token == null) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(Map.of("message", "Invalid or expired code"));
+        }
+        redisTemplate.delete(key);
+
+        return ResponseEntity.ok(Map.of("token", token.toString()));
     }
 
     /**
@@ -125,6 +157,22 @@ public class ProfileController {
                 "message", "Failed to upload image: " + e.getMessage()
             ));
         }
+    }
+
+    /**
+     * Update the current user's preferred notification time for budget alerts
+     * and bill reminders. Send { "time": null } to revert to the default time.
+     *
+     * PUT /profile/notification-time
+     * Body: { "time": "21:30" }
+     */
+    @PutMapping("/profile/notification-time")
+    public ResponseEntity<ProfileDTO> updateNotificationTime(@RequestBody Map<String, String> request) {
+        String time = request.get("time");
+        java.time.LocalTime notificationTime = (time == null || time.isBlank())
+                ? null
+                : java.time.LocalTime.parse(time);
+        return ResponseEntity.ok(profileService.updateNotificationTime(notificationTime));
     }
 
     // ==================== ACCOUNT DELETION ENDPOINTS ====================
