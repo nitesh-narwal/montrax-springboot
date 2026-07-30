@@ -8,6 +8,7 @@ import in.tracking.moneymanager.entity.SubscriptionPlanEntity;
 import in.tracking.moneymanager.repository.ProfileRepository;
 import in.tracking.moneymanager.repository.SubscriptionPlanRepository;
 import in.tracking.moneymanager.repository.SubscriptionRepository;
+import in.tracking.moneymanager.service.messaging.EmailMessageProducer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.CacheEvict;
@@ -39,7 +40,7 @@ public class SubscriptionService {
     private final SubscriptionPlanRepository subscriptionPlanRepository;
     private final ProfileService profileService;
 
-    private final EmailService emailService;
+    private final EmailMessageProducer emailMessageProducer;
     private final ProfileRepository profileRepository;
 
     /**
@@ -132,10 +133,14 @@ public class SubscriptionService {
                     log.info("Deactivated previous subscription {} for upgrade", existing.getId());
                 });
 
+        // Fetch profile entity for the relationship
+        ProfileEntity profile = profileRepository.findById(profileId)
+                .orElseThrow(() -> new RuntimeException("Profile not found with ID: " + profileId));
+
         // Create new subscription
         SubscriptionEntity subscription = SubscriptionEntity.builder()
-                .profileId(profileId)
-                .planId(planId)
+                .profile(profile)
+                .plan(plan)
                 .planType(plan.getName())
                 .startDate(startDate)
                 .endDate(endDate)
@@ -185,7 +190,7 @@ public class SubscriptionService {
         Long profileId = profileService.getCurrentProfile().getId();
 
         // Verify ownership
-        if (!subscription.getProfileId().equals(profileId)) {
+        if (!subscription.getProfile().getId().equals(profileId)) {
             throw new RuntimeException("Access denied - not your subscription");
         }
 
@@ -258,14 +263,14 @@ public class SubscriptionService {
         int sent = 0;
         for (SubscriptionEntity sub : subscriptions) {
             try {
-                profileRepository.findById(sub.getProfileId()).ifPresent(profile -> {
+                profileRepository.findById(sub.getProfile().getId()).ifPresent(profile -> {
                     if (profile.getEmail() != null && !profile.getEmail().isBlank()) {
                         String subject = daysLeft == 1
                                 ? "Your Money Manager subscription expires tomorrow"
                                 : "Your Money Manager subscription expires in " + daysLeft + " days";
 
                         String body = buildExpiryReminderEmail(profile, sub, daysLeft);
-                        emailService.sendEmail(profile.getEmail(), subject, body);
+                        emailMessageProducer.send(profile.getEmail(), subject, body);
                     }
                 });
                 sent++;
@@ -328,12 +333,12 @@ public class SubscriptionService {
 
     private void sendGracePeriodEmail(SubscriptionEntity subscription) {
         try {
-            profileRepository.findById(subscription.getProfileId()).ifPresent(profile -> {
+            profileRepository.findById(subscription.getProfile().getId()).ifPresent(profile -> {
                 if (profile.getEmail() == null || profile.getEmail().isBlank()) return;
 
                 String subject = "Subscription in Grace Period - Renew to Keep Premium Access";
                 String body = buildGracePeriodEmail(profile, subscription);
-                emailService.sendEmail(profile.getEmail(), subject, body);
+                emailMessageProducer.send(profile.getEmail(), subject, body);
             });
         } catch (Exception e) {
             // Do not fail subscription status updates because of mail failure
@@ -343,12 +348,12 @@ public class SubscriptionService {
 
     private void sendExpiredEmail(SubscriptionEntity subscription) {
         try {
-            profileRepository.findById(subscription.getProfileId()).ifPresent(profile -> {
+            profileRepository.findById(subscription.getProfile().getId()).ifPresent(profile -> {
                 if (profile.getEmail() == null || profile.getEmail().isBlank()) return;
 
                 String subject = "Subscription Expired - You are now on Free Plan";
                 String body = buildExpiredEmail(profile, subscription);
-                emailService.sendEmail(profile.getEmail(), subject, body);
+                emailMessageProducer.send(profile.getEmail(), subject, body);
             });
         } catch (Exception e) {
             // Do not fail subscription status updates because of mail failure

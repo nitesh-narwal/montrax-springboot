@@ -5,7 +5,10 @@ import in.tracking.moneymanager.dto.ExpenceDTO;
 import in.tracking.moneymanager.dto.IncomeDTO;
 import in.tracking.moneymanager.dto.SubscriptionDTO;
 import in.tracking.moneymanager.entity.BankTransactionEntity;
+import in.tracking.moneymanager.entity.CategoryEntity;
+import in.tracking.moneymanager.entity.ProfileEntity;
 import in.tracking.moneymanager.repository.BankTransactionRepository;
+import in.tracking.moneymanager.repository.CategoryRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
@@ -36,6 +39,7 @@ import java.util.Map;
 public class BankTransactionService {
 
     private final BankTransactionRepository bankTransactionRepository;
+    private final CategoryRepository categoryRepository;
     private final CsvParserService csvParserService;
     private final ProfileService profileService;
     private final SubscriptionService subscriptionService;
@@ -47,12 +51,14 @@ public class BankTransactionService {
     @Autowired
     public BankTransactionService(
             BankTransactionRepository bankTransactionRepository,
+            CategoryRepository categoryRepository,
             CsvParserService csvParserService,
             ProfileService profileService,
             SubscriptionService subscriptionService,
             @Lazy ExpenceService expenceService,
             @Lazy IncomeService incomeService) {
         this.bankTransactionRepository = bankTransactionRepository;
+        this.categoryRepository = categoryRepository;
         this.csvParserService = csvParserService;
         this.profileService = profileService;
         this.subscriptionService = subscriptionService;
@@ -70,13 +76,14 @@ public class BankTransactionService {
      */
     @Transactional
     public Map<String, Object> importCsv(MultipartFile file, String bankName) {
-        Long profileId = profileService.getCurrentProfile().getId();
+        ProfileEntity profile = profileService.getCurrentProfile();
+        Long profileId = profile.getId();
 
         // Check if user has remaining imports
         checkImportLimit(profileId);
 
         // Parse CSV file
-        List<BankTransactionEntity> transactions = csvParserService.parseCSV(file, profileId, bankName);
+        List<BankTransactionEntity> transactions = csvParserService.parseCSV(file, profile, bankName);
 
         if (transactions.isEmpty()) {
             return Map.of(
@@ -148,11 +155,13 @@ public class BankTransactionService {
         Long profileId = profileService.getCurrentProfile().getId();
 
         // Verify ownership
-        if (!txn.getProfileId().equals(profileId)) {
+        if (!txn.getProfile().getId().equals(profileId)) {
             throw new RuntimeException("Access denied - not your transaction");
         }
 
-        txn.setCategoryId(categoryId);
+        CategoryEntity category = categoryRepository.findById(categoryId)
+                .orElseThrow(() -> new RuntimeException("Category not found"));
+        txn.setCategory(category);
 
         // Create a descriptive name
         String name = txn.getMerchantName() != null && !txn.getMerchantName().isEmpty()
@@ -211,7 +220,7 @@ public class BankTransactionService {
                 .orElseThrow(() -> new RuntimeException("Transaction not found"));
 
         // Verify ownership
-        if (!txn.getProfileId().equals(profileId)) {
+        if (!txn.getProfile().getId().equals(profileId)) {
             throw new RuntimeException("Access denied - not your transaction");
         }
 
@@ -234,7 +243,7 @@ public class BankTransactionService {
         for (Long id : ids) {
             try {
                 BankTransactionEntity txn = bankTransactionRepository.findById(id).orElse(null);
-                if (txn != null && txn.getProfileId().equals(profileId)) {
+                if (txn != null && txn.getProfile().getId().equals(profileId)) {
                     bankTransactionRepository.delete(txn);
                     deleted++;
                 }
@@ -314,7 +323,7 @@ public class BankTransactionService {
                 .orElseThrow(() -> new RuntimeException("Transaction not found"));
 
         // Prevent cross-user access
-        if (!txn.getProfileId().equals(profileId)) {
+        if (!txn.getProfile().getId().equals(profileId)) {
             throw new RuntimeException("Access denied - not your transaction");
         }
 
@@ -409,7 +418,7 @@ public class BankTransactionService {
                 .amount(entity.getAmount())
                 .type(entity.getType())
                 .balance(entity.getBalance())
-                .categoryId(entity.getCategoryId())
+                .categoryId(entity.getCategory() != null ? entity.getCategory().getId() : null)
                 .suggestedCategory(entity.getSuggestedCategory())
                 .merchantName(entity.getMerchantName())
                 .isConverted(entity.getIsConverted())

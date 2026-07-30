@@ -9,6 +9,7 @@ import in.tracking.moneymanager.entity.RecurringTransactionEntity;
 import in.tracking.moneymanager.repository.CategoryRepository;
 import in.tracking.moneymanager.repository.ProfileRepository;
 import in.tracking.moneymanager.repository.RecurringTransactionRepository;
+import in.tracking.moneymanager.service.messaging.EmailMessageProducer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -39,10 +40,12 @@ public class RecurringTransactionService {
     private final ExpenceService expenceService;
     private final IncomeService incomeService;
     private final ProfileService profileService;
-    private final EmailService emailService;
+    private final EmailMessageProducer emailMessageProducer;
 
     // Max recurring transactions per user (to prevent abuse)
     private static final int MAX_RECURRING_PER_USER = 50;
+    // Default hour (24h, IST) bill reminders are sent at when the user hasn't set a preference
+    private static final int DEFAULT_REMINDER_HOUR = 9;
     // Max transactions to process per job run (to limit DB load)
     private static final int BATCH_SIZE = 100;
 
@@ -54,8 +57,8 @@ public class RecurringTransactionService {
      * Get all recurring transactions for current user.
      */
     public List<RecurringTransactionDTO> getAllRecurring() {
-        Long profileId = profileService.getCurrentProfile().getId();
-        return recurringRepo.findByProfileIdAndIsActiveTrue(profileId)
+        ProfileEntity profile = profileService.getCurrentProfile();
+        return recurringRepo.findByProfileAndIsActiveTrue(profile)
                 .stream()
                 .map(this::toDTO)
                 .collect(Collectors.toList());
@@ -66,39 +69,49 @@ public class RecurringTransactionService {
      */
     @Transactional
     public RecurringTransactionDTO createRecurring(RecurringTransactionDTO dto) {
-        Long profileId = profileService.getCurrentProfile().getId();
+        ProfileEntity profile = profileService.getCurrentProfile();
 
         // Check limit
-        long count = recurringRepo.countByProfileIdAndIsActiveTrue(profileId);
+        long count = recurringRepo.countByProfileAndIsActiveTrue(profile);
         if (count >= MAX_RECURRING_PER_USER) {
             throw new RuntimeException("Maximum recurring transactions limit reached (" +
                     MAX_RECURRING_PER_USER + ")");
         }
+
         validateRecurringInput(dto);
+
+        // Get category if provided
+        CategoryEntity category = null;
+        if (dto.getCategoryId() != null) {
+            category = categoryRepository.findById(dto.getCategoryId())
+                    .orElseThrow(() -> new RuntimeException("Category not found with ID: " + dto.getCategoryId()));
+        }
+
         RecurringTransactionEntity entity = RecurringTransactionEntity.builder()
-                .profileId(profileId)
+                .profile(profile)  // ✅ Use ProfileEntity object
                 .name(dto.getName())
                 .amount(dto.getAmount())
                 .type(dto.getType().toUpperCase())
-                .categoryId(dto.getCategoryId())
+                .category(category)  // ✅ Use CategoryEntity object
                 .icon(dto.getIcon())
                 .frequency(dto.getFrequency().toUpperCase())
                 .dayOfPeriod(dto.getDayOfPeriod())
-                .weekDaysCsv(toCsv(dto.getWeekDays()))                    // map new field
-                .excludedWeekDaysCsv(toCsv(dto.getExcludedWeekDays()))    // map new field
+                .weekDaysCsv(toCsv(dto.getWeekDays()))
+                .excludedWeekDaysCsv(toCsv(dto.getExcludedWeekDays()))
                 .startDate(dto.getStartDate() != null ? dto.getStartDate() : LocalDate.now())
                 .endDate(dto.getEndDate())
                 .isActive(true)
                 .sendReminder(dto.getSendReminder() != null ? dto.getSendReminder() : true)
                 .reminderDaysBefore(dto.getReminderDaysBefore() != null ? dto.getReminderDaysBefore() : 1)
                 .reminderSent(false)
+                .executionCount(0)  // ✅ Initialize execution counter
                 .build();
 
         // Calculate next execution date
         entity.setNextExecution(calculateNextExecution(entity, null));
 
         RecurringTransactionEntity saved = recurringRepo.save(entity);
-        log.info("Created recurring transaction: {} for profile {}", dto.getName(), profileId);
+        log.info("Created recurring transaction: {} for profile {}", dto.getName(), profile.getId());
 
         return toDTO(saved);
     }
@@ -108,24 +121,33 @@ public class RecurringTransactionService {
      */
     @Transactional
     public RecurringTransactionDTO updateRecurring(Long id, RecurringTransactionDTO dto) {
-        Long profileId = profileService.getCurrentProfile().getId();
+        ProfileEntity profile = profileService.getCurrentProfile();
 
         RecurringTransactionEntity entity = recurringRepo.findById(id)
                 .orElseThrow(() -> new RuntimeException("Recurring transaction not found"));
 
-        if (!entity.getProfileId().equals(profileId)) {
+        if (!entity.getProfile().getId().equals(profile.getId())) {
             throw new RuntimeException("Access denied");
         }
 
         validateRecurringInput(dto);
 
+        // Get category if provided
+        CategoryEntity category = null;
+        if (dto.getCategoryId() != null) {
+            category = categoryRepository.findById(dto.getCategoryId())
+                    .orElseThrow(() -> new RuntimeException("Category not found with ID: " + dto.getCategoryId()));
+        }
+
         entity.setName(dto.getName());
         entity.setAmount(dto.getAmount());
         entity.setType(dto.getType().toUpperCase());
-        entity.setCategoryId(dto.getCategoryId());
+        entity.setCategory(category);  // ✅ Use CategoryEntity object
         entity.setIcon(dto.getIcon());
         entity.setFrequency(dto.getFrequency().toUpperCase());
         entity.setDayOfPeriod(dto.getDayOfPeriod());
+        entity.setWeekDaysCsv(toCsv(dto.getWeekDays()));  // ✅ Update week days CSV
+        entity.setExcludedWeekDaysCsv(toCsv(dto.getExcludedWeekDays()));  // ✅ Update excluded days CSV
         entity.setEndDate(dto.getEndDate());
         entity.setSendReminder(dto.getSendReminder() != null ? dto.getSendReminder() : true);
         entity.setReminderDaysBefore(dto.getReminderDaysBefore() != null ? dto.getReminderDaysBefore() : 1);
@@ -134,7 +156,7 @@ public class RecurringTransactionService {
         entity.setNextExecution(calculateNextExecution(entity, entity.getLastExecuted()));
 
         RecurringTransactionEntity saved = recurringRepo.save(entity);
-        log.info("Updated recurring transaction: {} (profile: {})", id, profileId);
+        log.info("Updated recurring transaction: {} (profile: {})", id, profile.getId());
 
         return toDTO(saved);
     }
@@ -144,18 +166,18 @@ public class RecurringTransactionService {
      */
     @Transactional
     public void deleteRecurring(Long id) {
-        Long profileId = profileService.getCurrentProfile().getId();
+        ProfileEntity profile = profileService.getCurrentProfile();
 
         RecurringTransactionEntity entity = recurringRepo.findById(id)
                 .orElseThrow(() -> new RuntimeException("Recurring transaction not found"));
 
-        if (!entity.getProfileId().equals(profileId)) {
+        if (!entity.getProfile().getId().equals(profile.getId())) {
             throw new RuntimeException("Access denied");
         }
 
         entity.setIsActive(false);
         recurringRepo.save(entity);
-        log.info("Deactivated recurring transaction: {} (profile: {})", id, profileId);
+        log.info("Deactivated recurring transaction: {} (profile: {})", id, profile.getId());
     }
 
     /**
@@ -192,38 +214,39 @@ public class RecurringTransactionService {
                 }
 
                 // Create the actual transaction
+                // Create the actual transaction
                 if ("EXPENSE".equals(recurring.getType())) {
                     ExpenceDTO expense = ExpenceDTO.builder()
                             .name(recurring.getName() + " (Auto)")
                             .amount(recurring.getAmount())
                             .date(recurring.getNextExecution())
-                            .categoryId(recurring.getCategoryId())
+                            .categoryId(recurring.getCategory() != null ? recurring.getCategory().getId() : null)  // ✅ Get ID from category object
                             .icon(recurring.getIcon())
                             .build();
-                    expenceService.addExpenceForProfile(expense, recurring.getProfileId());
+                    expenceService.addExpenceForProfile(expense, recurring.getProfile().getId());  // ✅ Get ID from profile object
                 } else if ("INCOME".equals(recurring.getType())) {
                     IncomeDTO income = IncomeDTO.builder()
                             .name(recurring.getName() + " (Auto)")
                             .amount(recurring.getAmount())
                             .date(recurring.getNextExecution())
-                            .categoryId(recurring.getCategoryId())
+                            .categoryId(recurring.getCategory() != null ? recurring.getCategory().getId() : null)  // ✅ Get ID from category object
                             .icon(recurring.getIcon())
                             .build();
-                    incomeService.addIncomeForProfile(income, recurring.getProfileId());
+                    incomeService.addIncomeForProfile(income, recurring.getProfile().getId());  // ✅ Get ID from profile object
                 }
 
-                // Update last executed and calculate next execution
+// Update last executed and calculate next execution
                 recurring.setLastExecuted(recurring.getNextExecution());
                 recurring.setNextExecution(calculateNextExecution(recurring, recurring.getLastExecuted()));
                 recurring.setReminderSent(false);  // Reset reminder for next period
+                recurring.setExecutionCount((recurring.getExecutionCount() != null ? recurring.getExecutionCount() : 0) + 1);  // ✅ Increment execution counter
                 recurringRepo.save(recurring);
 
                 resetReminderIds.add(recurring.getId());
                 processed++;
 
                 log.debug("Executed recurring: {} -> {} for profile {}",
-                        recurring.getName(), recurring.getType(), recurring.getProfileId());
-
+                        recurring.getName(), recurring.getType(), recurring.getProfile().getId());
             } catch (Exception e) {
                 log.error("Failed to execute recurring {}: {}", recurring.getId(), e.getMessage());
                 failed++;
@@ -235,14 +258,17 @@ public class RecurringTransactionService {
 
     /**
      * Scheduled job: Send reminders for upcoming transactions.
-     * Runs every day at 9 AM IST.
+     * Runs every hour; each profile is only reminded during its preferred
+     * notification hour (default 9 AM IST if not set), so this behaves the
+     * same as a fixed daily 9 AM job for anyone who hasn't customized it.
      */
-    @Scheduled(cron = "0 0 9 * * *", zone = "Asia/Kolkata")
+    @Scheduled(cron = "0 0 * * * *", zone = "Asia/Kolkata")
     @Transactional
     public void sendReminders() {
         log.info("Running bill reminder job...");
         LocalDate today = LocalDate.now();
         LocalDate reminderDate = today.plusDays(3);  // Look ahead 3 days
+        int currentHour = java.time.LocalTime.now(java.time.ZoneId.of("Asia/Kolkata")).getHour();
 
         List<RecurringTransactionEntity> upcoming = recurringRepo
                 .findTransactionsNeedingReminder(today, reminderDate);
@@ -250,9 +276,14 @@ public class RecurringTransactionService {
         int sent = 0;
         for (RecurringTransactionEntity recurring : upcoming) {
             try {
-                // Get profile for email
-                ProfileEntity profile = profileRepository.findById(recurring.getProfileId())
-                        .orElse(null);
+                // Get profile from relationship (no DB lookup needed!)
+                ProfileEntity profile = recurring.getProfile();  // ✅ Use relationship directly
+
+                int preferredHour = profile != null && profile.getNotificationTime() != null
+                        ? profile.getNotificationTime().getHour() : DEFAULT_REMINDER_HOUR;
+                if (preferredHour != currentHour) {
+                    continue; // not this profile's preferred hour yet - retry next hour
+                }
 
                 if (profile != null && profile.getEmail() != null) {
                     // Check if within reminder window
@@ -264,9 +295,10 @@ public class RecurringTransactionService {
                                 " (₹" + recurring.getAmount() + ")";
                         String body = buildReminderEmail(recurring, profile.getFullname(), daysUntil);
 
-                        emailService.sendEmail(profile.getEmail(), subject, body);
+                        emailMessageProducer.send(profile.getEmail(), subject, body);
 
                         recurring.setReminderSent(true);
+                        recurring.setLastReminderSentAt(java.time.LocalDateTime.now());  // ✅ Track reminder timestamp
                         recurringRepo.save(recurring);
                         sent++;
                     }
@@ -275,7 +307,6 @@ public class RecurringTransactionService {
                 log.error("Failed to send reminder for {}: {}", recurring.getId(), e.getMessage());
             }
         }
-
         log.info("Reminder job complete. Sent: {} reminders", sent);
     }
 
@@ -416,10 +447,11 @@ public class RecurringTransactionService {
      */
     private RecurringTransactionDTO toDTO(RecurringTransactionEntity entity) {
         String categoryName = null;
-        if (entity.getCategoryId() != null) {
-            categoryName = categoryRepository.findById(entity.getCategoryId())
-                    .map(CategoryEntity::getName)
-                    .orElse(null);
+        Long categoryId = null;
+
+        if (entity.getCategory() != null) {  // ✅ Use relationship
+            categoryName = entity.getCategory().getName();  // ✅ No DB query needed!
+            categoryId = entity.getCategory().getId();
         }
 
         return RecurringTransactionDTO.builder()
@@ -427,11 +459,13 @@ public class RecurringTransactionService {
                 .name(entity.getName())
                 .amount(entity.getAmount())
                 .type(entity.getType())
-                .categoryId(entity.getCategoryId())
+                .categoryId(categoryId)  // ✅ Get ID from category object
                 .categoryName(categoryName)
                 .icon(entity.getIcon())
                 .frequency(entity.getFrequency())
                 .dayOfPeriod(entity.getDayOfPeriod())
+                .weekDays(toList(entity.getWeekDaysCsv()))  // ✅ Convert CSV back to list
+                .excludedWeekDays(toList(entity.getExcludedWeekDaysCsv()))  // ✅ Convert CSV back to list
                 .startDate(entity.getStartDate())
                 .endDate(entity.getEndDate())
                 .nextExecution(entity.getNextExecution())
@@ -440,6 +474,15 @@ public class RecurringTransactionService {
                 .sendReminder(entity.getSendReminder())
                 .reminderDaysBefore(entity.getReminderDaysBefore())
                 .build();
+    }
+
+    // ✅ ADD THIS NEW HELPER METHOD
+    private List<Integer> toList(String csv) {
+        if (csv == null || csv.isBlank()) return Collections.emptyList();
+        return Arrays.stream(csv.split(","))
+                .map(String::trim)
+                .map(Integer::parseInt)
+                .collect(Collectors.toList());
     }
 
     /**

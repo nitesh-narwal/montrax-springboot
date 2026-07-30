@@ -35,3 +35,10 @@ build/
 # Environment variables
 .env
 .env.*
+
+
+.claude/
+graphify-out/
+
+CLAUDE.md
+frontend.txt

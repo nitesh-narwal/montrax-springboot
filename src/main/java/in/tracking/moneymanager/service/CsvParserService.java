@@ -2,6 +2,7 @@ package in.tracking.moneymanager.service;
 
 import com.opencsv.CSVReader;
 import in.tracking.moneymanager.entity.BankTransactionEntity;
+import in.tracking.moneymanager.entity.ProfileEntity;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -58,7 +59,7 @@ public class CsvParserService {
      * @param bankName Bank name for categorization
      * @return List of parsed transactions
      */
-    public List<BankTransactionEntity> parseCSV(MultipartFile file, Long profileId, String bankName) {
+    public List<BankTransactionEntity> parseCSV(MultipartFile file, ProfileEntity profile, String bankName) {
         List<BankTransactionEntity> transactions = new ArrayList<>();
 
         try (CSVReader reader = new CSVReader(new InputStreamReader(file.getInputStream()))) {
@@ -92,7 +93,7 @@ public class CsvParserService {
                 }
 
                 try {
-                    BankTransactionEntity transaction = parseRowWithColumnMap(row, columnMap, bankName, profileId);
+                    BankTransactionEntity transaction = parseRowWithColumnMap(row, columnMap, bankName, profile);
                     if (transaction != null && transaction.getAmount().compareTo(BigDecimal.ZERO) > 0) {
                         transactions.add(transaction);
                         log.debug("Parsed transaction: date={}, desc={}, amount={}, type={}",
@@ -223,7 +224,7 @@ public class CsvParserService {
      * Parse row using detected column mapping.
      */
     private BankTransactionEntity parseRowWithColumnMap(String[] row, Map<String, Integer> columnMap,
-                                                         String bankName, Long profileId) {
+                                                         String bankName, ProfileEntity profile) {
         // Clean all cells
         for (int i = 0; i < row.length; i++) {
             row[i] = row[i] != null ? row[i].trim() : "";
@@ -346,7 +347,7 @@ public class CsvParserService {
             return null;
         }
 
-        return buildTransaction(profileId, bankName, date != null ? date : LocalDate.now(),
+        return buildTransaction(profile, bankName, date != null ? date : LocalDate.now(),
                                description, refNo, debit, credit, balance);
     }
 
@@ -374,7 +375,7 @@ public class CsvParserService {
     /**
      * Build transaction entity from parsed values.
      */
-    private BankTransactionEntity buildTransaction(Long profileId, String bankName,
+    private BankTransactionEntity buildTransaction(ProfileEntity profile, String bankName,
                                                     LocalDate date, String description, String refNo,
                                                     BigDecimal debit, BigDecimal credit, BigDecimal balance) {
         // Determine transaction type and amount
@@ -396,7 +397,7 @@ public class CsvParserService {
         String merchantName = categorizationService.extractMerchantName(description);
 
         return BankTransactionEntity.builder()
-                .profileId(profileId)
+                .profile(profile)
                 .bankName(bankName)
                 .transactionDate(date)
                 .description(description)

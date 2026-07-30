@@ -1,6 +1,7 @@
 package in.tracking.moneymanager.repository;
 
 import in.tracking.moneymanager.entity.PaymentHistoryEntity;
+import in.tracking.moneymanager.entity.ProfileEntity;
 import org.springframework.data.jpa.repository.JpaRepository;
 import java.util.List;
 import java.util.Optional;
@@ -12,7 +13,7 @@ import java.util.Optional;
 public interface PaymentHistoryRepository extends JpaRepository<PaymentHistoryEntity, Long> {
 
     // Get payment history for a user, most recent first
-    List<PaymentHistoryEntity> findByProfileIdOrderByCreatedAtDesc(Long profileId);
+    List<PaymentHistoryEntity> findByProfileOrderByCreatedAtDesc(ProfileEntity profile);
 
     // Find payment by Razorpay order ID (for verification)
     Optional<PaymentHistoryEntity> findByRazorpayOrderId(String orderId);

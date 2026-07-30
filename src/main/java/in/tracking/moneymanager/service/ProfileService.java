@@ -4,10 +4,10 @@ import in.tracking.moneymanager.dto.AuthDTO;
 import in.tracking.moneymanager.dto.ProfileDTO;
 import in.tracking.moneymanager.entity.ProfileEntity;
 import in.tracking.moneymanager.repository.ProfileRepository;
+import in.tracking.moneymanager.service.messaging.EmailMessageProducer;
 import in.tracking.moneymanager.util.JwtUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
@@ -27,14 +27,17 @@ import java.util.UUID;
 @Slf4j
 public class ProfileService {
 
-    private final EmailService emailService;
+    private final EmailMessageProducer emailMessageProducer;
     private final ProfileRepository profileRepository;
     private final PasswordEncoder passwordEncoder;
     private final AuthenticationManager authenticationManager;
     private final JwtUtil jwtUtil;
+    private final AppCacheService appCacheService;
+    private final OtpService otpService;
 
-    @Value("${money.manager.frontend.url}")
-    private String frontendURL;
+    private String getFrontendURL() {
+        return appCacheService.get("money.manager.frontend.url", "http://localhost:5173");
+    }
 
     // Grace period in days before permanent deletion
     private static final int DELETION_GRACE_PERIOD_DAYS = 3;
@@ -49,24 +52,34 @@ public class ProfileService {
             throw new RuntimeException("Email already registered: " + profileDTO.getEmail());
         }
 
+        // Phone number + OTP verification is required at registration
+        if (profileDTO.getPhoneNumber() == null || profileDTO.getPhoneNumber().isBlank()) {
+            throw new RuntimeException("Phone number is required for OTP verification");
+        }
+
+        // phone_number has no DB unique constraint (existing rows already share numbers from
+        // earlier test data) - reject at the application layer to stop new duplicates
+        if (!profileRepository.findByPhoneNumberOrderByCreatedAtDesc(profileDTO.getPhoneNumber()).isEmpty()) {
+            throw new RuntimeException("Phone number already registered: " + profileDTO.getPhoneNumber());
+        }
+
         ProfileEntity newProfile = toEntity(profileDTO);
         newProfile.setActivationToken(UUID.randomUUID().toString());
         newProfile.setIsActive(false);
+        newProfile.setIsPhoneVerified(false);
         newProfile = profileRepository.save(newProfile);
         profileRepository.flush(); // Force commit the profile save immediately
 
         log.info("Profile registered with ID: {} and email: {}", newProfile.getId(), newProfile.getEmail());
 
-        // Send activation email (failure should not roll back profile save)
+        // Send OTP to phone first; only on SMS failure does OtpService fall back to
+        // emailing the code (bundled with the activation link) instead of sending both at once.
         try {
-            String activationLink = frontendURL + "/activate/" + newProfile.getActivationToken();
-            String subject = "Activate your Money Manager account";
-            String body = "Please click on the following link to activate your account: " + activationLink;
-            emailService.sendEmail(newProfile.getEmail(), subject, body);
-            log.info("Activation email sent to: {}", newProfile.getEmail());
+            otpService.sendOtp(newProfile.getPhoneNumber());
+            log.info("Registration OTP sent to: {}", newProfile.getPhoneNumber());
         } catch (Exception e) {
-            log.error("Failed to send activation email to: {}. Error: {}", newProfile.getEmail(), e.getMessage());
-            // Don't throw - profile is already saved, user can request resend
+            log.error("Failed to send registration OTP to: {}. Error: {}", newProfile.getPhoneNumber(), e.getMessage());
+            // Don't throw - profile is already saved, user can request OTP resend via /api/otp/resend
         }
 
         return toDTO(newProfile);
@@ -79,6 +92,7 @@ public class ProfileService {
                 .email(profileDTO.getEmail())
                 .password(passwordEncoder.encode(profileDTO.getPassword()))
                 .profileImageUrl(profileDTO.getProfileImageUrl())
+                .phoneNumber(profileDTO.getPhoneNumber())
                 .createdAt(profileDTO.getCreatedAt())
                 .updatedAt(profileDTO.getUpdatedAt())
                 .build();
@@ -90,9 +104,27 @@ public class ProfileService {
                 .fullname(profileEntity.getFullname())
                 .email(profileEntity.getEmail())
                 .profileImageUrl(profileEntity.getProfileImageUrl())
+                .role(profileEntity.getRole())
+                .phoneNumber(profileEntity.getPhoneNumber())
+                .isPhoneVerified(profileEntity.getIsPhoneVerified())
+                .authProvider(profileEntity.getAuthProvider())
+                .notificationTime(profileEntity.getNotificationTime())
                 .createdAt(profileEntity.getCreatedAt())
                 .updatedAt(profileEntity.getUpdatedAt())
                 .build();
+    }
+
+    /**
+     * Update the current user's preferred notification time (used for budget
+     * alerts and bill reminders). Pass null to revert to each job's default time.
+     */
+    @Transactional
+    public ProfileDTO updateNotificationTime(java.time.LocalTime notificationTime) {
+        ProfileEntity profile = getCurrentProfile();
+        profile.setNotificationTime(notificationTime);
+        profile = profileRepository.save(profile);
+        log.info("Updated notification time for profile {}: {}", profile.getId(), notificationTime);
+        return toDTO(profile);
     }
 
     @Transactional
@@ -102,6 +134,10 @@ public class ProfileService {
                 .map(profile -> {
                     log.info("Found profile with email: {} for activation", profile.getEmail());
                     profile.setIsActive(true);
+                    // Clicking the emailed link proves phone ownership just as much as entering the
+                    // OTP does (the link is only ever emailed as a fallback for that same OTP) -
+                    // so it also clears the phone-verification gate, in case the user never got the SMS.
+                    profile.setIsPhoneVerified(true);
                     profile.setActivationToken(null); // Clear token after use to prevent reuse
                     profileRepository.save(profile);
                     log.info("Profile {} activated successfully", profile.getEmail());
@@ -153,10 +189,10 @@ public class ProfileService {
         }
 
         try {
-            String activationLink = frontendURL + "/activate/" + profile.getActivationToken();
+            String activationLink = getFrontendURL() + "/activate/" + profile.getActivationToken();
             String subject = "Activate your Money Manager account";
             String body = "Please click on the following link to activate your account: " + activationLink;
-            emailService.sendEmail(profile.getEmail(), subject, body);
+            emailMessageProducer.send(profile.getEmail(), subject, body);
             log.info("Activation email resent to: {}", email);
 
             return Map.of(
@@ -200,6 +236,11 @@ public class ProfileService {
                 .fullname(currentUser.getFullname())
                 .email(currentUser.getEmail())
                 .profileImageUrl(currentUser.getProfileImageUrl())
+                .role(currentUser.getRole())
+                .phoneNumber(currentUser.getPhoneNumber())
+                .isPhoneVerified(currentUser.getIsPhoneVerified())
+                .authProvider(currentUser.getAuthProvider())
+                .notificationTime(currentUser.getNotificationTime())
                 .createdAt(currentUser.getCreatedAt())
                 .updatedAt(currentUser.getUpdatedAt())
                 .build();
@@ -221,36 +262,38 @@ public class ProfileService {
     }
 
     public Map<String, Object> authenticateAndGenerateToken(AuthDTO authDTO) {
-        try {
-            // Check if account is pending deletion and cancel it
-            ProfileEntity profile = profileRepository.findByEmail(authDTO.getEmail())
-                    .orElseThrow(() -> new RuntimeException("Profile not found"));
+        // Check if account is pending deletion and cancel it
+        ProfileEntity profile = profileRepository.findByEmail(authDTO.getEmail())
+                .orElseThrow(() -> new org.springframework.security.authentication.BadCredentialsException("Invalid email or password"));
 
-            if (Boolean.TRUE.equals(profile.getIsPendingDeletion())) {
-                // Cancel deletion on login
-                cancelAccountDeletion(profile);
-                log.info("Account deletion cancelled for user {} due to login", authDTO.getEmail());
-            }
-
-            authenticationManager.authenticate(new UsernamePasswordAuthenticationToken(authDTO.getEmail(), authDTO.getPassword()));
-            //Generate JWT token
-            String token = jwtUtil.generateToken(authDTO.getEmail());
-
-            Map<String, Object> response = new java.util.HashMap<>();
-            response.put("token", token);
-            response.put("user", getPublicProfile(authDTO.getEmail()));
-
-            // If deletion was pending, inform the user
-            if (Boolean.TRUE.equals(profile.getIsPendingDeletion())) {
-                response.put("deletionCancelled", true);
-                response.put("message", "Your account deletion has been cancelled. Welcome back!");
-            }
-
-            return response;
-
-        } catch (Exception e) {
-            throw new RuntimeException("Invalid username/password supplied");
+        if (Boolean.TRUE.equals(profile.getIsPendingDeletion())) {
+            // Cancel deletion on login
+            cancelAccountDeletion(profile);
+            log.info("Account deletion cancelled for user {} due to login", authDTO.getEmail());
         }
+
+        if (!Boolean.TRUE.equals(profile.getIsPhoneVerified())) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.FORBIDDEN,
+                    "Phone verification required. Please verify the OTP sent to your phone before logging in.");
+        }
+
+        authenticationManager.authenticate(new UsernamePasswordAuthenticationToken(authDTO.getEmail(), authDTO.getPassword()));
+        //Generate JWT token with role claim embedded
+        String role = profile.getRole() != null ? profile.getRole() : "USER";
+        String token = jwtUtil.generateToken(authDTO.getEmail(), Map.of("role", role));
+
+        Map<String, Object> response = new java.util.HashMap<>();
+        response.put("token", token);
+        response.put("user", getPublicProfile(authDTO.getEmail()));
+
+        // If deletion was pending, inform the user
+        if (Boolean.TRUE.equals(profile.getIsPendingDeletion())) {
+            response.put("deletionCancelled", true);
+            response.put("message", "Your account deletion has been cancelled. Welcome back!");
+        }
+
+        return response;
     }
 
     // ==================== ACCOUNT DELETION METHODS ====================
@@ -312,7 +355,7 @@ public class ProfileService {
             profile.getFullname() != null ? profile.getFullname() : "User",
             scheduledDeletion.toString()
         );
-        emailService.sendEmail(profile.getEmail(), subject, body);
+        emailMessageProducer.send(profile.getEmail(), subject, body);
 
         log.info("Account deletion requested for profile: {}. Scheduled at: {}", profile.getId(), scheduledDeletion);
 
@@ -437,11 +480,6 @@ public class ProfileService {
 
             if (profile == null) {
                 log.warn("Password reset requested for non-existent email: {}", email);
-                // List all emails in DB for debugging (remove in production)
-                log.debug("Existing emails in database: {}",
-                    profileRepository.findAll().stream()
-                        .map(ProfileEntity::getEmail)
-                        .toList());
                 return successResponse; // Don't reveal that email doesn't exist
             }
 
@@ -456,7 +494,7 @@ public class ProfileService {
             profileRepository.save(profile);
 
             // Send password reset email
-            String resetLink = frontendURL + "/reset-password?token=" + resetToken;
+            String resetLink = getFrontendURL() + "/reset-password?token=" + resetToken;
             String subject = "Reset Your Money Manager Password";
             String body = String.format(
                 "<html><body>" +
@@ -482,7 +520,7 @@ public class ProfileService {
                 PASSWORD_RESET_TOKEN_EXPIRY_HOURS
             );
 
-            emailService.sendEmail(profile.getEmail(), subject, body);
+            emailMessageProducer.send(profile.getEmail(), subject, body);
             log.info("Password reset email sent to: {}", email);
 
             return successResponse;
@@ -565,7 +603,7 @@ public class ProfileService {
         );
 
         try {
-            emailService.sendEmail(profile.getEmail(), subject, body);
+            emailMessageProducer.send(profile.getEmail(), subject, body);
         } catch (Exception e) {
             log.warn("Failed to send password reset confirmation email to: {}", profile.getEmail(), e);
             // Don't fail the reset operation if email fails

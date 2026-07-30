@@ -46,3 +46,11 @@ src/test/
 .DS_Store
 Thumbs.db
 
+graphify-out/
+
+.claude/
+
+CLAUDE.md
+
+frontend.txt
+

@@ -1,8 +1,11 @@
 package in.tracking.moneymanager.controller;
 
 import in.tracking.moneymanager.dto.IncomeDTO;
+import in.tracking.moneymanager.dto.PagedResponse;
 import in.tracking.moneymanager.service.IncomeService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -36,5 +39,12 @@ public class IncomeController {
     @GetMapping("/all")
     public ResponseEntity<List<IncomeDTO>> getAllIncomeDesc() {
         return ResponseEntity.ok(incomeService.getAllIncomeForCurrentUserOrderByDateDesc());
+    }
+
+    // Paginated income history: GET /incomes/paged?page=0&size=20&sort=date,desc
+    @GetMapping("/paged")
+    public ResponseEntity<PagedResponse<IncomeDTO>> getIncomesPaged(
+            @PageableDefault(size = 20, sort = "date") Pageable pageable) {
+        return ResponseEntity.ok(incomeService.getIncomesPaginated(pageable));
     }
 }

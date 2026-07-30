@@ -5,6 +5,8 @@ import in.tracking.moneymanager.entity.CategoryEntity;
 import in.tracking.moneymanager.entity.ProfileEntity;
 import in.tracking.moneymanager.repository.CategoryRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -17,6 +19,7 @@ public class CategoryService {
     private final ProfileService profileService;
 
     //save category
+    @CacheEvict(value = "categories", allEntries = true)
     public CategoryDTO saveCategory(CategoryDTO categoryDTO) {
         ProfileEntity profile = profileService.getCurrentProfile();
         if (categoryRepository.existsByNameAndProfileId(categoryDTO.getName(), profile.getId()))
@@ -26,6 +29,7 @@ public class CategoryService {
     }
 
     //get categories for current users
+    @Cacheable(value = "categories", key = "#root.target.currentProfileId()")
     public List<CategoryDTO> getCategoriesForCurrentUser() {
         ProfileEntity profile = profileService.getCurrentProfile();
         return categoryRepository.findByProfileId(profile.getId())
@@ -33,6 +37,7 @@ public class CategoryService {
     }
 
     //get categories by type for current user
+    @Cacheable(value = "categories", key = "#root.target.currentProfileId() + ':' + #type")
     public List<CategoryDTO> getCategoriesByTypeForCurrentUser(String type) {
         ProfileEntity profile = profileService.getCurrentProfile();
         return categoryRepository.findByTypeAndProfileId(type, profile.getId())
@@ -40,6 +45,7 @@ public class CategoryService {
     }
 
     //update category
+    @CacheEvict(value = "categories", allEntries = true)
     public CategoryDTO updateCategory(Long categoryId, CategoryDTO categoryDTO) {
         CategoryEntity existingCategory = categoryRepository.findByIdAndProfileId(
                         categoryId, profileService.getCurrentProfile().getId())
@@ -52,11 +58,17 @@ public class CategoryService {
     }
 
     //delete category
+    @CacheEvict(value = "categories", allEntries = true)
     public void deleteCategory(Long categoryId) {
         CategoryEntity existingCategory = categoryRepository.findByIdAndProfileId(
                         categoryId, profileService.getCurrentProfile().getId())
                 .orElseThrow(() -> new RuntimeException("Category not found or you don't have permission to delete it"));
         categoryRepository.delete(existingCategory);
+    }
+
+    // Cache key helper - exposed for SpEL in cache annotations above
+    public Long currentProfileId() {
+        return profileService.getCurrentProfile().getId();
     }
 
     //helper methods
