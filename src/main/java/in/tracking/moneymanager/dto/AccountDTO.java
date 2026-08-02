@@ -4,28 +4,22 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+
 import java.math.BigDecimal;
-import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.util.Set;
 
 @Data
 @AllArgsConstructor
 @NoArgsConstructor
 @Builder
-public class IncomeDTO {
+public class AccountDTO {
 
     private Long id;
     private String name;
+    private String type;
     private String icon;
-    private String categoryName;
-    private Long categoryId;
-    private BigDecimal amount;
-    private LocalDate date;
-    private String attachmentUrl;
+    private BigDecimal balance;
+    private Boolean isActive;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
-    private Set<String> tags;
-    private Long accountId;
-    private String accountName;
 }

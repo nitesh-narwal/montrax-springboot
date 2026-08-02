@@ -20,28 +20,11 @@ public interface ExpenceRepository extends JpaRepository<ExpenceEntity, Long> {
     // Paginated transaction history
     Page<ExpenceEntity> findByProfileId(Long profileId, Pageable pageable);
 
-    Page<ExpenceEntity> findByProfileIdAndDateBetweenAndNameContainingIgnoreCase(
-            Long profileId,
-            LocalDate startDate,
-            LocalDate endDate,
-            String keyword,
-            Pageable pageable
-    );
-
     //select * from tbl_expence where profile_id = ?1 order by date desc limit 5
     List<ExpenceEntity> findTop5ByProfileIdOrderByDateDesc(Long profileId);
 
     @Query("SELECT SUM(e.amount) FROM ExpenceEntity e WHERE e.profile.id = :profileId")
     BigDecimal findTotalExpenceByProfileId(@Param("profileId") Long profileId);
-
-    //select * from tbl_expence where profile_id = ?1 and date between ?2 and ?3 and name like ?4
-    List<ExpenceEntity> findByProfileIdAndDateBetweenAndNameContainingIgnoreCase(
-            Long profileId,
-            LocalDate startDate,
-            LocalDate endDate,
-            String keyword,
-            Sort sort
-    );
 
     //select * from tbl_expence where profile_id = ?1 and date between ?2 and ?3
     List<ExpenceEntity> findByProfileIdAndDateBetween(
@@ -80,5 +63,37 @@ public interface ExpenceRepository extends JpaRepository<ExpenceEntity, Long> {
             @Param("profileId") Long profileId,
             @Param("startDate") LocalDate startDate,
             @Param("endDate") LocalDate endDate);
+
+    // Same filter as findByProfileIdAndDateBetweenAndNameContainingIgnoreCase, plus an optional tag
+    // (tag = null means "no tag filter", so this can replace the plain search unconditionally)
+    @Query("""
+       SELECT DISTINCT e FROM ExpenceEntity e LEFT JOIN e.tags t
+       WHERE e.profile.id = :profileId
+         AND e.date BETWEEN :startDate AND :endDate
+         AND LOWER(e.name) LIKE LOWER(CONCAT('%', :keyword, '%'))
+         AND (:tag IS NULL OR t = :tag)
+       """)
+    List<ExpenceEntity> searchByProfileAndFilters(
+            @Param("profileId") Long profileId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate,
+            @Param("keyword") String keyword,
+            @Param("tag") String tag,
+            Sort sort);
+
+    @Query("""
+       SELECT DISTINCT e FROM ExpenceEntity e LEFT JOIN e.tags t
+       WHERE e.profile.id = :profileId
+         AND e.date BETWEEN :startDate AND :endDate
+         AND LOWER(e.name) LIKE LOWER(CONCAT('%', :keyword, '%'))
+         AND (:tag IS NULL OR t = :tag)
+       """)
+    Page<ExpenceEntity> searchByProfileAndFilters(
+            @Param("profileId") Long profileId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate,
+            @Param("keyword") String keyword,
+            @Param("tag") String tag,
+            Pageable pageable);
 
 }

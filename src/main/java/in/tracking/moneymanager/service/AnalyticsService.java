@@ -11,6 +11,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -50,6 +51,7 @@ public class AnalyticsService {
      */
     @Cacheable(value = "analytics", key = "'analytics_' + #root.target.getProfileId() + '_' + #startDate + '_' + #endDate",
                unless = "#result == null")
+    @Transactional(readOnly = true)
     public AnalyticsDTO getAnalytics(LocalDate startDate, LocalDate endDate) {
         // Safety: Limit date range to prevent heavy queries
         long daysBetween = ChronoUnit.DAYS.between(startDate, endDate);

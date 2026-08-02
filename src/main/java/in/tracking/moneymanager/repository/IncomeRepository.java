@@ -20,28 +20,11 @@ public interface IncomeRepository extends JpaRepository<IncomeEntity, Long> {
     // Paginated transaction history
     Page<IncomeEntity> findByProfileId(Long profileId, Pageable pageable);
 
-    Page<IncomeEntity> findByProfileIdAndDateBetweenAndNameContainingIgnoreCase(
-            Long profileId,
-            LocalDate startDate,
-            LocalDate endDate,
-            String keyword,
-            Pageable pageable
-    );
-
     //select * from tbl_income where profile_id = ?1 order by date desc limit 5
     List<IncomeEntity> findTop5ByProfileIdOrderByDateDesc(Long profileId);
 
     @Query("SELECT SUM(e.amount) FROM IncomeEntity e WHERE e.profile.id = :profileId")
     BigDecimal findTotalIncomeByProfileId(@Param("profileId") Long profileId);
-
-    //select * from tbl_income where profile_id = ?1 and date between ?2 and ?3 and name like ?4
-    List<IncomeEntity> findByProfileIdAndDateBetweenAndNameContainingIgnoreCase(
-            Long profileId,
-            LocalDate startDate,
-            LocalDate endDate,
-            String keyword,
-            Sort sort
-    );
 
     //select * from tbl_income where profile_id = ?1 and date between ?2 and ?3
     List<IncomeEntity> findByProfileIdAndDateBetween(
@@ -69,5 +52,37 @@ public interface IncomeRepository extends JpaRepository<IncomeEntity, Long> {
             @Param("profileId") Long profileId,
             @Param("startDate") LocalDate startDate,
             @Param("endDate") LocalDate endDate);
+
+    // Same filter as findByProfileIdAndDateBetweenAndNameContainingIgnoreCase, plus an optional tag
+    // (tag = null means "no tag filter", so this can replace the plain search unconditionally)
+    @Query("""
+       SELECT DISTINCT i FROM IncomeEntity i LEFT JOIN i.tags t
+       WHERE i.profile.id = :profileId
+         AND i.date BETWEEN :startDate AND :endDate
+         AND LOWER(i.name) LIKE LOWER(CONCAT('%', :keyword, '%'))
+         AND (:tag IS NULL OR t = :tag)
+       """)
+    List<IncomeEntity> searchByProfileAndFilters(
+            @Param("profileId") Long profileId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate,
+            @Param("keyword") String keyword,
+            @Param("tag") String tag,
+            Sort sort);
+
+    @Query("""
+       SELECT DISTINCT i FROM IncomeEntity i LEFT JOIN i.tags t
+       WHERE i.profile.id = :profileId
+         AND i.date BETWEEN :startDate AND :endDate
+         AND LOWER(i.name) LIKE LOWER(CONCAT('%', :keyword, '%'))
+         AND (:tag IS NULL OR t = :tag)
+       """)
+    Page<IncomeEntity> searchByProfileAndFilters(
+            @Param("profileId") Long profileId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate,
+            @Param("keyword") String keyword,
+            @Param("tag") String tag,
+            Pageable pageable);
 
 }

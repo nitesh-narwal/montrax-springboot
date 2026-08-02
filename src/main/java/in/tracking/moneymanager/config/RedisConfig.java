@@ -158,6 +158,10 @@ public class RedisConfig implements CachingConfigurer {
                 .withCacheConfiguration("categories",
                         defaultConfig.entryTtl(Duration.ofHours(24)))
 
+                // Accounts - rarely changes (balance updates evict it), long TTL
+                .withCacheConfiguration("accounts",
+                        defaultConfig.entryTtl(Duration.ofHours(24)))
+
                 // AI Insights - expensive to generate, cache longer
                 .withCacheConfiguration("ai-insights",
                         defaultConfig.entryTtl(Duration.ofHours(6)))

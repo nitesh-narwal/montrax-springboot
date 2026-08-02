@@ -6,6 +6,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -49,6 +50,7 @@ public class SmartInsightsService {
      */
     @Cacheable(value = "predictions", key = "'pred_' + #root.target.getProfileId()",
                unless = "#result == null")
+    @Transactional(readOnly = true)
     public Map<String, Object> predictNextMonthSpending() {
         Long profileId = getProfileId();
         LocalDate today = LocalDate.now();
@@ -139,6 +141,7 @@ public class SmartInsightsService {
      */
     @Cacheable(value = "anomalies", key = "'anom_' + #root.target.getProfileId()",
                unless = "#result == null || #result.isEmpty()")
+    @Transactional(readOnly = true)
     public List<Map<String, Object>> detectAnomalies() {
         Long profileId = getProfileId();
         LocalDate today = LocalDate.now();
@@ -225,6 +228,7 @@ public class SmartInsightsService {
      */
     @Cacheable(value = "ai-tips", key = "'tips_' + #root.target.getProfileId()",
                unless = "#result == null")
+    @Transactional(readOnly = true)
     public Map<String, Object> getPersonalizedTips() {
         Long profileId = getProfileId();
         LocalDate today = LocalDate.now();

@@ -34,10 +34,11 @@ public class FilterController {
         String sortField = filter.getSortField() != null ? filter.getSortField() : "date";
         Sort.Direction direction = "desc".equalsIgnoreCase(filter.getSortOrder()) ? Sort.Direction.DESC : Sort.Direction.ASC;
         Sort sort = Sort.by(direction, sortField);
+        String tag = filter.getTag();
         if("income".equalsIgnoreCase(filter.getType())){
-            return ResponseEntity.ok(incomeService.filterIncomes(startDate, endDate, keyword, sort));
+            return ResponseEntity.ok(incomeService.filterIncomes(startDate, endDate, keyword, tag, sort));
         }else if("expence".equalsIgnoreCase(filter.getType())){
-            return ResponseEntity.ok(expenceService.filterExpences(startDate, endDate, keyword, sort));
+            return ResponseEntity.ok(expenceService.filterExpences(startDate, endDate, keyword, tag, sort));
         }else {
             return ResponseEntity.badRequest().body("Invalid type, Must be either income or expence ");
         }
@@ -51,10 +52,11 @@ public class FilterController {
         LocalDate startDate = filter.getStartDate() != null ? filter.getStartDate() : PG_MIN_DATE;
         LocalDate endDate = filter.getEndDate() != null ? filter.getEndDate() : LocalDate.now();
         String keyword = filter.getKeyword() != null ? filter.getKeyword() : "";
+        String tag = filter.getTag();
         if("income".equalsIgnoreCase(filter.getType())){
-            return ResponseEntity.ok(incomeService.filterIncomesPaginated(startDate, endDate, keyword, pageable));
+            return ResponseEntity.ok(incomeService.filterIncomesPaginated(startDate, endDate, keyword, tag, pageable));
         }else if("expence".equalsIgnoreCase(filter.getType())){
-            return ResponseEntity.ok(expenceService.filterExpencesPaginated(startDate, endDate, keyword, pageable));
+            return ResponseEntity.ok(expenceService.filterExpencesPaginated(startDate, endDate, keyword, tag, pageable));
         }else {
             return ResponseEntity.badRequest().body("Invalid type, Must be either income or expence ");
         }

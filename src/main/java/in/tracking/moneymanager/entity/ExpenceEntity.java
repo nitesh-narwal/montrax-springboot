@@ -11,6 +11,8 @@ import org.hibernate.annotations.UpdateTimestamp;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.HashSet;
+import java.util.Set;
 
 @Data
 @AllArgsConstructor
@@ -20,6 +22,7 @@ import java.time.LocalDateTime;
 @Table(name = "tbl_expences", indexes = {
         @Index(name = "idx_expences_profile_id", columnList = "profile_id"),
         @Index(name = "idx_expences_category_id", columnList = "category_id"),
+        @Index(name = "idx_expences_account_id", columnList = "account_id"),
         @Index(name = "idx_expences_date", columnList = "date"),
         @Index(name = "idx_expences_created_at", columnList = "created_at"),
         @Index(name = "idx_expences_profile_date", columnList = "profile_id,date")
@@ -61,6 +64,21 @@ public class ExpenceEntity {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "profile_id", nullable = false, foreignKey = @ForeignKey(name = "fk_expence_profile"))
     private ProfileEntity profile;
+
+    // Optional - not every expense needs to be tied to an account
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "account_id", nullable = true, foreignKey = @ForeignKey(name = "fk_expence_account"))
+    private AccountEntity account;
+
+    @ElementCollection(fetch = FetchType.LAZY)
+    @CollectionTable(name = "tbl_expence_tags", joinColumns = @JoinColumn(name = "expence_id"),
+            indexes = {
+                    @Index(name = "idx_expence_tags_expence_id", columnList = "expence_id"),
+                    @Index(name = "idx_expence_tags_tag", columnList = "tag")
+            })
+    @Column(name = "tag", length = 50)
+    @Builder.Default
+    private Set<String> tags = new HashSet<>();
 
     @PrePersist
     public void prePersist() {

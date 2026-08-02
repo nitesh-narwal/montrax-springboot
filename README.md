@@ -25,9 +25,28 @@ Montrax Backend is a RESTful API service built with **Spring Boot 4.0.2** and **
 - 🤖 **AI-Powered Financial Insights** via Google Gemini, with circuit breaker + client-side rate limiting
 - 💳 **Razorpay Subscriptions** with a 7-day grace period and plan-based feature gating (AOP)
 - 📨 **Two messaging systems, two different jobs** — Kafka for audit/event streaming, RabbitMQ for retryable background work
-- 🧠 **Redis-backed caching** across 9 named caches, each with hand-picked TTLs and a self-healing error handler
+- 🧠 **Redis-backed caching** across 10 named caches, each with hand-picked TTLs and a self-healing error handler
 - 🏦 **Bank Statement Import** (CSV/Excel) with merchant auto-categorization
+- 🧾 **PDF/Excel Report Export**, 🏷️ **Tags & Search**, 🏦 **Multi-Account Net Worth Tracking**, 🤝 **Split Expenses** — see [What's New](#-whats-new) below
 - 🐳 **Docker-Ready**, tuned to run inside a 768MB container
+
+---
+
+## 🆕 What's New
+
+Four features shipped in the same sitting, each reusing existing infrastructure rather than bolting on something new — that's not an accident, it's what "add a feature the right way" looks like in a codebase that already has the pieces.
+
+### 🧾 PDF & Excel Report Export
+`GET /api/reports/export?format=pdf|excel&startDate=&endDate=` turns your spending into a document you can actually hand someone. It doesn't run a second set of queries — `ReportService` calls the exact same `AnalyticsService.getAnalytics()` that powers the dashboard charts, so a report never disagrees with what's on screen. PDF generation uses itext7, Excel uses Apache POI (`XSSFWorkbook`) — both were already Maven dependencies, sitting completely unused until now. Frontend gets a "Download Report" button on the Analytics page with a format picker; the blob-download pattern it introduced (`src/lib/download.ts`) was a first for this codebase.
+
+### 🏷️ Tags & Tag Search
+Expenses and incomes can now carry free-form tags (`#work-trip`, `#reimbursable`, whatever you want) via a `@ElementCollection`, searchable through the same `/filter/paged` endpoint the date/keyword search already used. Tag badges show up right on the transaction card. Small feature, but it closes a real gap — categories are great for *what* something was, tags are for *why*.
+
+### 🏦 Multi-Account Net Worth Tracking
+A new `Account` concept (bank / cash / wallet / credit card / investment) with a running balance that adjusts automatically whenever you link an expense or income to it — pay from your wallet, the wallet's balance drops; get paid into your bank account, it goes up. A daily scheduled job snapshots each profile's total net worth, so the new **Accounts** page can chart it over time, not just show a single number.
+
+### 🤝 Split Expenses
+Paid for dinner and split it three ways? Attach participants (name + their share) to an expense, and Montrax tracks who's settled up and who hasn't. Worth being upfront about the scope here: this is a *personal* split-tracking ledger, not shared access between accounts — the app has no concept of one profile seeing another's data, and building that out would've been a different feature entirely. What you get is exactly what most people actually want: "I fronted the money, remind me who still owes me," with a "Who Owes You" widget right on the dashboard. Splits load via a single batched query per list request (`findByExpenseIdIn`) rather than one query per expense - worth calling out because the first pass got this wrong (N+1, caught and fixed before it ever shipped to a real database).
 
 ---
 
@@ -108,13 +127,14 @@ Caching is split into two deliberately different mechanisms because they solve d
 
 ### 1. Spring Cache abstraction, backed by Redis (`RedisConfig`)
 
-Nine named caches, each with a TTL matched to how often its underlying data actually changes:
+Ten named caches, each with a TTL matched to how often its underlying data actually changes:
 
 | Cache | TTL | Backing service | Why this TTL |
 |---|---|---|---|
 | `dashboard` | 5 min | Dashboard aggregation | Changes with every transaction; short TTL keeps it close to live |
 | `subscription` | 1 hour | `SubscriptionService` | Checked on almost every request (rate limiter tier lookup); rarely changes |
 | `categories` | 24 hours | `CategoryService` | User-defined, changes only on explicit CRUD (which evicts immediately) |
+| `accounts` | 24 hours | `AccountService` | Same rationale as `categories` - rarely changes, evicted on every balance-affecting write |
 | `ai-insights` | 6 hours | AI insight generation | Expensive Gemini calls; stale-for-hours is an acceptable tradeoff |
 | `monthly-summary` | 15 min | Monthly rollups | Moderate volatility |
 | `financial-health` | 12 hours | AI-computed score | Expensive to compute, doesn't need to be fresh-to-the-minute |
@@ -123,7 +143,7 @@ Nine named caches, each with a TTL matched to how often its underlying data actu
 | `anomalies` | 30 min | `SmartInsightsService` | Recent-data detection, moderate freshness need |
 | `ai-tips` | 6 hours | Gemini-generated tips | Same rationale as ai-insights |
 
-All nine share one `CacheErrorHandler`: if a cached value fails to deserialize (e.g. a stale shape left over from a DTO change), the error is logged **and the broken entry is evicted immediately** — so the *next* request self-heals and repopulates from the DB, instead of failing on every request for the rest of the TTL window. `@CacheEvict(allEntries = true)` on every mutating method keeps writes and reads consistent (cache-aside pattern).
+All ten share one `CacheErrorHandler`: if a cached value fails to deserialize (e.g. a stale shape left over from a DTO change), the error is logged **and the broken entry is evicted immediately** — so the *next* request self-heals and repopulates from the DB, instead of failing on every request for the rest of the TTL window. `@CacheEvict(allEntries = true)` on every mutating method keeps writes and reads consistent (cache-aside pattern).
 
 ### 2. Raw `RedisTemplate` for stateful, non-cache-abstraction use
 
@@ -233,6 +253,7 @@ All three run inside `@Transactional` boundaries where they mutate data, and log
 | **Email** | Mailjet SMTP | Transactional emails (queued via RabbitMQ) |
 | **SMS/OTP** | TextBee | Phone verification |
 | **File Storage** | Cloudinary | Profile images |
+| **Reports** | iText7 (PDF) + Apache POI (Excel) | Downloadable financial reports |
 | **Build** | Maven | Dependency & build management |
 | **Container** | Docker (Alpine JRE) | Deployment |
 
@@ -241,7 +262,16 @@ All three run inside `@Transactional` boundaries where they mutate data, and log
 ## 🚀 Features
 
 ### 📊 Core Financial Management
-Expense/income CRUD with categorization and date filtering, budget goals, custom categories, recurring transactions.
+Expense/income CRUD with categorization, tagging, and date filtering, budget goals, custom categories, recurring transactions.
+
+### 🏦 Accounts & Net Worth
+Named accounts (bank, cash, wallet, credit card, investment) with an auto-adjusting running balance and a daily-snapshotted net worth trend chart.
+
+### 🤝 Split Expenses
+Attach participants and their share to any expense, mark them settled as they pay you back, and see who owes you at a glance from the dashboard.
+
+### 🧾 Reports
+One-click PDF or Excel export of any date range, built from the same data your analytics charts already show.
 
 ### 🤖 AI-Powered (plan-gated)
 Financial health analysis, smart spending insights, money-saving tips, natural-language queries, automatic merchant categorization.
@@ -412,11 +442,30 @@ APP_ACTIVATION_URL=https://your-backend-domain.com
 ### Core Data
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET/POST/PUT/DELETE` | `/api/expenses` | Expense CRUD |
-| `GET/POST/PUT/DELETE` | `/api/incomes` | Income CRUD |
+| `GET/POST/DELETE` | `/expences` | Expense CRUD (create accepts optional `tags`, `accountId`, `splits`) |
+| `GET/POST/DELETE` | `/incomes` | Income CRUD (create accepts optional `tags`, `accountId`) |
 | `GET/POST/PUT/DELETE` | `/api/categories` | Category CRUD |
 | `GET/POST/PUT/DELETE` | `/api/budget-goals` | Budget goals |
 | `GET/POST/PUT/DELETE` | `/api/recurring` | Recurring transactions |
+| `POST` | `/filter/paged` | Server-side search: keyword + date range + **tag** + sort |
+
+### Accounts & Net Worth
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET/POST/PUT/DELETE` | `/api/accounts` | Account CRUD (bank/cash/wallet/credit card/investment) |
+| `GET` | `/api/accounts/net-worth` | Current total net worth |
+| `GET` | `/api/accounts/net-worth-trend?months=6` | Daily net worth snapshots for charting |
+
+### Split Expenses
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `PATCH` | `/expences/{expenseId}/splits/{splitId}/settle` | Mark a participant's share as paid |
+| `GET` | `/expences/splits/summary` | "Who owes you" - unsettled totals per participant |
+
+### Reports
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/reports/export?format=pdf\|excel&startDate=&endDate=` | Download a PDF/Excel financial report |
 
 ### AI & Analytics (plan-gated)
 | Method | Endpoint | Description |

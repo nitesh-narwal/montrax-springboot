@@ -2,6 +2,7 @@ package in.tracking.moneymanager.service;
 
 import in.tracking.moneymanager.dto.IncomeDTO;
 import in.tracking.moneymanager.dto.PagedResponse;
+import in.tracking.moneymanager.entity.AccountEntity;
 import in.tracking.moneymanager.entity.CategoryEntity;
 import in.tracking.moneymanager.entity.IncomeEntity;
 import in.tracking.moneymanager.entity.ProfileEntity;
@@ -29,6 +30,7 @@ public class IncomeService {
     private final CategoryRepository categoryRepository;
     private final IncomeRepository incomeRepository;
     private final ProfileService profileService;
+    private final AccountService accountService;
     private final TransactionEventPublisher transactionEventPublisher;
 
 
@@ -37,8 +39,14 @@ public class IncomeService {
         ProfileEntity profile = profileService.getCurrentProfile();
         CategoryEntity category = categoryRepository.findById(dto.getCategoryId())
                 .orElseThrow(() -> new RuntimeException("Category not found with id: " + dto.getCategoryId()));
-        IncomeEntity newIncome = toEntity(dto, profile, category);
+        AccountEntity account = dto.getAccountId() != null
+                ? accountService.getAccountForProfile(dto.getAccountId(), profile.getId())
+                : null;
+        IncomeEntity newIncome = toEntity(dto, profile, category, account);
         IncomeEntity savedIncome = incomeRepository.save(newIncome);
+        if (account != null) {
+            accountService.adjustBalance(account, savedIncome.getAmount());
+        }
         transactionEventPublisher.publish(TransactionEvent.builder()
                 .profileId(profile.getId())
                 .transactionId(savedIncome.getId())
@@ -68,6 +76,9 @@ public class IncomeService {
         if(!entity.getProfile().getId().equals(profile.getId())) {
             throw new RuntimeException("You don't have permission to delete this income");
         }
+        if (entity.getAccount() != null) {
+            accountService.adjustBalance(entity.getAccount(), entity.getAmount().negate());
+        }
         incomeRepository.deleteById(incomeId);
         transactionEventPublisher.publish(TransactionEvent.builder()
                 .profileId(profile.getId())
@@ -94,10 +105,10 @@ public class IncomeService {
         return total != null ? total : BigDecimal.ZERO;
     }
 
-    //filter incomes
-    public List<IncomeDTO> filterIncomes(LocalDate startDate, LocalDate endDate, String keyword, Sort sort){
-        List<IncomeEntity> list = incomeRepository.findByProfileIdAndDateBetweenAndNameContainingIgnoreCase(
-                profileService.getCurrentProfile().getId(), startDate, endDate, keyword, sort);
+    //filter incomes, optionally narrowed to one tag
+    public List<IncomeDTO> filterIncomes(LocalDate startDate, LocalDate endDate, String keyword, String tag, Sort sort){
+        List<IncomeEntity> list = incomeRepository.searchByProfileAndFilters(
+                profileService.getCurrentProfile().getId(), startDate, endDate, keyword, tag, sort);
         return list.stream().map(this::toDTO).toList();
     }
 
@@ -122,11 +133,11 @@ public class IncomeService {
         return PagedResponse.of(page, this::toDTO);
     }
 
-    //paginated + filtered income history
-    public PagedResponse<IncomeDTO> filterIncomesPaginated(LocalDate startDate, LocalDate endDate, String keyword, Pageable pageable) {
+    //paginated + filtered income history, optionally narrowed to one tag
+    public PagedResponse<IncomeDTO> filterIncomesPaginated(LocalDate startDate, LocalDate endDate, String keyword, String tag, Pageable pageable) {
         ProfileEntity profile = profileService.getCurrentProfile();
-        Page<IncomeEntity> page = incomeRepository.findByProfileIdAndDateBetweenAndNameContainingIgnoreCase(
-                profile.getId(), startDate, endDate, keyword, pageable);
+        Page<IncomeEntity> page = incomeRepository.searchByProfileAndFilters(
+                profile.getId(), startDate, endDate, keyword, tag, pageable);
         return PagedResponse.of(page, this::toDTO);
     }
 
@@ -155,7 +166,7 @@ public class IncomeService {
     }
 
     //helper method to calculate total expence for a given category
-    private IncomeEntity toEntity(IncomeDTO incomeDTO, ProfileEntity profile, CategoryEntity category){
+    private IncomeEntity toEntity(IncomeDTO incomeDTO, ProfileEntity profile, CategoryEntity category, AccountEntity account){
         return IncomeEntity.builder()
                 .name(incomeDTO.getName())
                 .icon(incomeDTO.getIcon())
@@ -164,6 +175,8 @@ public class IncomeService {
                 .attachmentUrl(incomeDTO.getAttachmentUrl())
                 .profile(profile)
                 .category(category)
+                .account(account)
+                .tags(incomeDTO.getTags() != null ? new java.util.HashSet<>(incomeDTO.getTags()) : new java.util.HashSet<>())
                 .build();
     }
 
@@ -179,6 +192,11 @@ public class IncomeService {
                 .attachmentUrl(entity.getAttachmentUrl())
                 .createdAt(entity.getCreatedAt())
                 .updatedAt(entity.getUpdatedAt())
+                // Copy out of the lazy-loaded proxy while the session is still open - see
+                // ExpenceService.toDTO for why this matters (LazyInitializationException risk).
+                .tags(entity.getTags() != null ? new java.util.HashSet<>(entity.getTags()) : null)
+                .accountId(entity.getAccount() != null ? entity.getAccount().getId() : null)
+                .accountName(entity.getAccount() != null ? entity.getAccount().getName() : null)
                 .build();
     }
 }

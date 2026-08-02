@@ -11,6 +11,8 @@ import org.hibernate.annotations.UpdateTimestamp;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.HashSet;
+import java.util.Set;
 
 @Data
 @AllArgsConstructor
@@ -20,6 +22,7 @@ import java.time.LocalDateTime;
 @Table(name = "tbl_incomes", indexes = {
         @Index(name = "idx_incomes_profile_id", columnList = "profile_id"),
         @Index(name = "idx_incomes_category_id", columnList = "category_id"),
+        @Index(name = "idx_incomes_account_id", columnList = "account_id"),
         @Index(name = "idx_incomes_date", columnList = "date"),
         @Index(name = "idx_incomes_created_at", columnList = "created_at"),
         @Index(name = "idx_incomes_profile_date", columnList = "profile_id,date")
@@ -61,6 +64,21 @@ public class IncomeEntity {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "profile_id", nullable = false, foreignKey = @ForeignKey(name = "fk_income_profile"))
     private ProfileEntity profile;
+
+    // Optional - not every income needs to be tied to an account
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "account_id", nullable = true, foreignKey = @ForeignKey(name = "fk_income_account"))
+    private AccountEntity account;
+
+    @ElementCollection(fetch = FetchType.LAZY)
+    @CollectionTable(name = "tbl_income_tags", joinColumns = @JoinColumn(name = "income_id"),
+            indexes = {
+                    @Index(name = "idx_income_tags_income_id", columnList = "income_id"),
+                    @Index(name = "idx_income_tags_tag", columnList = "tag")
+            })
+    @Column(name = "tag", length = 50)
+    @Builder.Default
+    private Set<String> tags = new HashSet<>();
 
     @PrePersist
     public void prePersist() {
