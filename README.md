@@ -15,6 +15,33 @@
 
 ---
 
+## 📚 Table of Contents
+
+- [Overview](#-overview)
+- [What's New](#-whats-new)
+- [System Design](#-system-design)
+- [Request Flow](#-request-flow--what-actually-happens-on-a-request)
+- [Caching Strategy](#-caching-strategy)
+- [Async & Messaging](#-async--messaging--two-systems-two-jobs)
+- [Security](#-security)
+- [AI Integration Resilience](#-ai-integration-resilience-google-gemini)
+- [Subscription Tiers](#-subscription-tiers--feature-gating)
+- [Scheduled Jobs](#-scheduled-jobs)
+- [Tech Stack](#-tech-stack)
+- [Features](#-features)
+- [Project Structure](#️-project-structure)
+- [Quick Start](#-quick-start)
+- [Configuration](#-configuration)
+- [API Reference](#-api-reference)
+- [CI/CD Deployment Pipeline](#-cicd-deployment-pipeline)
+- [Load Handling & Capacity Limits](#-load-handling--capacity-limits)
+- [Health Checks](#-health-checks)
+- [Testing](#-testing)
+- [Deployment Checklist](#-deployment-checklist)
+- [Contributing](#-contributing)
+
+---
+
 ## 🌟 Overview
 
 Montrax Backend is a RESTful API service built with **Spring Boot 4.0.2** and **Java 21**. It is a genuinely polyglot-persistence system: **PostgreSQL** as the system of record, **Redis** as the cache and shared-state store, **MongoDB** as an optional document store for AI history/audit/config, **Kafka** as an append-only event stream, and **RabbitMQ** as a retryable work queue. Every piece of infrastructure was chosen for a specific job rather than "because it's popular" — the sections below explain the *why*, not just the *what*.
@@ -50,74 +77,142 @@ Paid for dinner and split it three ways? Attach participants (name + their share
 
 ---
 
-## 🏗️ Architecture
+## 🏗️ System Design
 
-```
-                                   ┌────────────────────────────┐
-                                   │   CLIENT (React/TS SPA)    │
-                                   └──────────────┬─────────────┘
-                                                  │ HTTPS
-                                                  ▼
-                        ┌─────────────────────────────────────────────────┐
-                        │              SPRING BOOT APPLICATION            │
-                        │                                                 │
-                        │  Security Filter Chain (in order):              │
-                        │   CORS → JwtRequestFilter → RateLimitFilter →   │
-                        │   IdempotencyFilter → AuditFilter → Dispatcher  │
-                        │                                                 │
-                        │  Dispatcher → Controller → AOP guards           │
-                        │   (@AdminOnly / @PremiumFeature) → Service      │
-                        │   → Repository → GlobalExceptionHandler         │
-                        └───┬──────────┬───────────┬────────────┬─────────┘
-                            │          │           │            │
-              ┌─────────────▼──┐ ┌─────▼─────┐ ┌───▼────┐ ┌─────▼──────────────┐
-              │  PostgreSQL    │ │   Redis   │ │ MongoDB│ │  Kafka + RabbitMQ  │
-              │  (Neon, JPA)   │ │  (cache + │ │(Atlas, │ │  (async backbone)  │
-              │  System of     │ │  rate-    │ │optional│ │                    │
-              │  record        │ │  limit +  │ │AI/audit│ │ Kafka: audit trail │
-              │                │ │  idempo-  │ │/config)│ │ + txn events (fire │
-              │                │ │  tency)   │ │        │ │ -and-forget)       │
-              │                │ │           │ │        │ │ RabbitMQ: email /  │
-              │                │ │           │ │        │ │ CSV / subscription │
-              │                │ │           │ │        │ │ jobs (retry + DLQ) │
-              └────────────────┘ └───────────┘ └────────┘ └────────────────────┘
-                                                  ▲
-                                     ┌────────────┴────────────┐
-                                     │ External APIs: Gemini AI,│
-                                     │ Razorpay, Mailjet SMTP,  │
-                                     │ Cloudinary, TextBee SMS  │
-                                     └──────────────────────────┘
+Montrax is a **modular monolith**: one deployable Spring Boot artifact, internally organized into clean layers (filters → controllers → AOP guards → services → repositories), talking to five purpose-picked pieces of infrastructure. Nothing here is polyglot persistence for its own sake — each store earns its place by doing one job nothing else does as well.
+
+```mermaid
+flowchart TB
+    Client["🖥️ Client<br/>React / TypeScript SPA"]
+
+    subgraph App["🍃 Spring Boot Application — single deployable, 768MB container"]
+        direction TB
+        Filters["Security Filter Chain<br/>CORS → JWT → RateLimit → Idempotency → Audit"]
+        Ctrl["Controllers"]
+        AOP["AOP Guards<br/>@AdminOnly · @PremiumFeature"]
+        Svc["Services<br/>business logic"]
+        Repo["Repositories<br/>Spring Data JPA"]
+        Err["GlobalExceptionHandler"]
+
+        Filters --> Ctrl --> AOP --> Svc --> Repo
+        Svc -.errors.-> Err
+    end
+
+    Client -- HTTPS --> Filters
+
+    Repo --> PG[("🐘 PostgreSQL — Neon<br/>system of record")]
+    Svc --> Redis[("🔺 Redis<br/>cache · rate-limit · idempotency · OTP")]
+    Svc --> Mongo[("🍃 MongoDB Atlas — optional<br/>AI history · audit log · runtime config")]
+    Svc --> Kafka[["📨 Kafka<br/>audit trail + transaction events<br/>fire-and-forget"]]
+    Svc --> Rabbit[["🐇 RabbitMQ<br/>email · CSV import · subscription jobs<br/>retry ×3 + DLQ"]]
+
+    Svc --> Ext["☁️ External APIs<br/>Gemini AI · Razorpay · Mailjet · Cloudinary · TextBee"]
+
+    style Client fill:#1f6feb,color:#fff
+    style App fill:#0d1117,color:#fff,stroke:#30363d
+    style PG fill:#316192,color:#fff
+    style Redis fill:#dc382d,color:#fff
+    style Mongo fill:#4ea94b,color:#fff
+    style Kafka fill:#231f20,color:#fff
+    style Rabbit fill:#ff6600,color:#fff
+    style Ext fill:#6e40c9,color:#fff
 ```
 
-Every external dependency (Mongo, Redis, Kafka, RabbitMQ) is a **soft dependency** — the app degrades gracefully instead of crashing if any of them is unreachable at boot. That design choice shows up repeatedly below (Mongo auto-config exclusion, Kafka listeners started post-boot, Redis cache errors caught and evicted, RabbitMQ producer failures swallowed).
+**Design principle: every external dependency is soft.** Mongo, Redis, Kafka, and RabbitMQ can all be unreachable at boot without crashing the app — it degrades gracefully instead. That single decision shows up everywhere in the codebase:
+
+| Dependency | If unavailable | Where it's enforced |
+|---|---|---|
+| **MongoDB** | Auto-configuration excluded outright; `AppCacheService` falls back to `application.properties`/env vars | `MoneymanagerApplication` |
+| **Kafka** | Listener container has `autoStartup=false`; starts only after `ApplicationReadyEvent`, so a broker DNS hiccup can't block boot | `KafkaListenerStarter` |
+| **Redis** | Cache errors are caught and the broken entry evicted immediately — self-heals on the next request | `CacheErrorHandler` |
+| **RabbitMQ** | Producer send failures are caught and logged, never bubble up to the caller | messaging producers |
+
+Only **PostgreSQL is a hard dependency** — it's the system of record, and there's no meaningful degraded mode for "can't persist your expense."
+
+### Why five stores instead of one
+
+| Store | Job | Why not just Postgres? |
+|---|---|---|
+| **PostgreSQL** | Transactional system of record | N/A — this *is* the source of truth |
+| **Redis** | Shared, low-latency mutable state (cache, rate-limit counters, idempotency replay, OTPs) | This state is read/written on nearly every request; hitting Postgres for it would burn the 5-connection pool instantly |
+| **MongoDB** | Schema-flexible documents (AI history, audit log, runtime config) | These are append-heavy, loosely-structured, and don't need relational integrity or migrations |
+| **Kafka** | Append-only event log for audit/analytics | Losing one event to a broker blip is fine; a queue that blocks the request is not — Kafka's fire-and-forget publish fits |
+| **RabbitMQ** | Point-to-point work queue for things that must not be silently dropped | Email/CSV/subscription jobs need retry + dead-lettering semantics that a log-structured stream doesn't give you cleanly |
 
 ---
 
-## 📡 Request Lifecycle — What Actually Happens on a Request
+## 📡 Request Flow — What Actually Happens on a Request
 
-Take `POST /api/expenses` as the running example.
+Take `POST /api/expenses` as the running example. Every write endpoint in the API follows this exact shape.
 
-1. **CORS preflight** is answered by Spring's CORS filter using an allow-list built from `money.manager.frontend.url` (read live from `AppCacheService`, so the frontend origin can change without a redeploy) plus a set of localhost/Vercel patterns for development.
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant CORS as CORS Filter
+    participant JWT as JwtRequestFilter
+    participant RL as RateLimitFilter
+    participant IK as IdempotencyFilter
+    participant AF as AuditFilter
+    participant Ctrl as Controller
+    participant AOP as AOP Guard
+    participant Svc as ExpenceService
+    participant DB as PostgreSQL
+    participant Redis as Redis
+    participant Kafka as Kafka
 
-2. **`JwtRequestFilter`** reads the `Authorization: Bearer <token>` header, extracts the email claim, and — if the token is valid and not already authenticated in this request — populates `SecurityContextHolder` with a `UsernamePasswordAuthenticationToken`. Expired/malformed/bad-signature tokens are logged and simply leave the request unauthenticated; Spring Security's `authorizeHttpRequests` rule then rejects it with 401/403 rather than the filter throwing directly. This keeps auth failure handling in one place.
+    C->>CORS: POST /api/expenses
+    CORS->>JWT: origin allowed
+    JWT->>JWT: validate token, populate SecurityContext
+    JWT->>RL: authenticated (or left anonymous → 401 later)
+    RL->>Redis: INCR rate_limit:<email>:<hour>
+    Redis-->>RL: count
+    alt over hourly budget
+        RL-->>C: 429 Too Many Requests
+    else within budget
+        RL->>IK: continue
+        IK->>Redis: GET idempotency:<user>:<key>
+        alt cached response exists
+            Redis-->>IK: cached status + body
+            IK-->>C: replay verbatim, handler never runs
+        else no cache
+            IK->>AF: continue
+            AF->>Ctrl: start timer, dispatch
+            Ctrl->>AOP: check @PremiumFeature / @AdminOnly
+            AOP->>Svc: allowed
+            Svc->>DB: INSERT expense (HikariCP, pool=5)
+            DB-->>Svc: persisted
+            Svc-->>Ctrl: 201 Created
+            par async, after the response
+                Svc->>Kafka: publish TransactionEvent (best-effort)
+                Svc->>Redis: evict dashboard/analytics/categories caches
+            end
+            Ctrl-->>AF: response
+            AF->>Kafka: publish AuditEvent (method, path, status, latency)
+            AF-->>C: 201 Created
+        end
+    end
+```
 
-3. **`RateLimitFilter`** runs next. ADMIN users are exempt. For everyone else it resolves the caller's subscription tier (cached in Redis for 10 minutes under `tier_cache:<email>` so it isn't a DB hit on every request) and atomically increments an hourly counter in Redis (`rate_limit:<email>:<yyyyMMddHH>`, `INCR` + `EXPIRE` on first hit). If the tier's hourly budget is exceeded, the request is short-circuited with `429` before it ever reaches a controller.
+1. **CORS preflight** is answered using an allow-list built from `money.manager.frontend.url`, read live from `AppCacheService` so the frontend origin can change without a redeploy, plus localhost/Vercel patterns for development.
 
-4. **`IdempotencyFilter`** only engages if the client sent an `X-Idempotency-Key` header (opt-in, used for POST/PUT that shouldn't double-fire on client retry — e.g. payment or expense creation over a flaky connection). It checks Redis for a cached response under `idempotency:<user>:<key>`; if present, the cached status/body is replayed verbatim and the handler never re-executes. Otherwise the response is captured via `ContentCachingResponseWrapper` and, on a 2xx outcome, stored in Redis for 24h.
+2. **`JwtRequestFilter`** reads the `Authorization: Bearer <token>` header, extracts the email claim, and — if valid and not already authenticated — populates `SecurityContextHolder`. Expired/malformed/bad-signature tokens are logged and simply leave the request unauthenticated; Spring Security's `authorizeHttpRequests` rule rejects it with 401/403 rather than the filter throwing directly. Auth failure handling stays in one place.
 
-5. **`AuditFilter`** wraps the rest of the chain in a timer. After the response is written, if the caller is authenticated, it publishes an `AuditEvent` (method, path, status, latency, IP, timestamp) to **Kafka** — fire-and-forget, so a slow or down Kafka broker never adds latency to the user-facing request.
+3. **`RateLimitFilter`** runs next. ADMIN users are exempt. For everyone else it resolves the caller's subscription tier (cached in Redis for 10 minutes under `tier_cache:<email>`, so it isn't a DB hit on every request) and atomically increments an hourly counter (`rate_limit:<email>:<yyyyMMddHH>`, `INCR` + `EXPIRE` on first hit). Over budget → `429` before the request ever reaches a controller.
 
-6. **Controller → AOP guards → Service.** `ExpenceController` delegates to `ExpenceService`. If the endpoint were annotated `@PremiumFeature`, `PremiumFeatureAspect` would intercept first and return `403` before the method body runs at all if the caller's plan doesn't qualify. Admin endpoints get the same treatment twice over — once by the `SecurityConfig` path matcher (`hasRole("ADMIN")`) and again by the `@AdminOnly` / `AdminAccessAspect` — defense in depth for the one part of the API that can change other users' data.
+4. **`IdempotencyFilter`** only engages if the client sent an `X-Idempotency-Key` header (opt-in, for POST/PUT that shouldn't double-fire on client retry — payment or expense creation over a flaky connection). It checks Redis under `idempotency:<user>:<key>`; if present, the cached status/body is replayed and the handler never re-executes. Otherwise the response is captured via `ContentCachingResponseWrapper` and, on a 2xx outcome, stored for 24h.
 
-7. **Service → Repository → PostgreSQL.** The expense is persisted via Spring Data JPA/Hibernate over a HikariCP connection pool (deliberately small — see [Load Handling](#-load-handling--capacity-limits) below).
+5. **`AuditFilter`** wraps the rest of the chain in a timer. After the response is written, for an authenticated caller, it publishes an `AuditEvent` (method, path, status, latency, IP, timestamp) to **Kafka** — fire-and-forget, so a slow or down broker never adds latency to the user-facing request.
 
-8. **Side effects fire *after* the transaction, asynchronously:**
-   - `TransactionEventPublisher` sends a `TransactionEvent` to the Kafka topic `moneymanager.transactions` for downstream analytics consumers — best-effort, wrapped in try/catch so a Kafka hiccup never fails the expense creation itself.
-   - Any cache keyed on this user's data (`categories`, `analytics`, `dashboard`, etc.) is evicted so the next read is fresh.
+6. **Controller → AOP guards → Service.** `ExpenceController` delegates to `ExpenceService`. An endpoint annotated `@PremiumFeature` gets intercepted by `PremiumFeatureAspect`, returning `403` before the method body runs if the caller's plan doesn't qualify. Admin endpoints get defense in depth twice over — once by the `SecurityConfig` path matcher (`hasRole("ADMIN")`) and again by `@AdminOnly` / `AdminAccessAspect`.
 
-9. **Errors**, if any occur anywhere in steps 6-8, are caught by `GlobalExceptionHandler`: known `RuntimeException`s become a structured `400` with the message; anything unexpected becomes a `500` with a generic message to the client while the full stack trace is logged server-side only — clients never see a stack trace.
+7. **Service → Repository → PostgreSQL.** Persisted via Spring Data JPA/Hibernate over a deliberately small HikariCP pool (see [Load Handling](#-load-handling--capacity-limits)).
 
-The same shape (auth → rate limit → idempotency check → audit → AOP guard → service → async side effects) applies to every write endpoint in the API; reads skip the idempotency step since they're naturally safe to repeat.
+8. **Side effects fire *after* the transaction, asynchronously:** `TransactionEventPublisher` sends a `TransactionEvent` to Kafka topic `moneymanager.transactions` for downstream analytics — wrapped in try/catch so a Kafka hiccup never fails the expense creation. Any cache keyed on this user's data (`categories`, `analytics`, `dashboard`, etc.) is evicted so the next read is fresh.
+
+9. **Errors**, if any occur in steps 6–8, are caught by `GlobalExceptionHandler`: known `RuntimeException`s become a structured `400` with the message; anything unexpected becomes a `500` with a generic client-facing message while the full stack trace is logged server-side only — clients never see a stack trace.
+
+Reads follow the same shape minus the idempotency step, since they're naturally safe to repeat.
 
 ---
 
@@ -503,30 +598,76 @@ APP_ACTIVATION_URL=https://your-backend-domain.com
 
 ---
 
+## 🚀 CI/CD Deployment Pipeline
+
+Every push to `main` is the deploy button — no staging environment, no manual approval gate. The workflow (`.github/workflows/deploy.yml`) builds the jar, packages it into a Docker image, pushes it to DockerHub, then SSHes into the production Oracle Cloud instance to pull and restart the container.
+
+```mermaid
+flowchart TD
+    A["👨‍💻 git push main"] --> B["1️⃣ Checkout source<br/><sub>actions/checkout@v3</sub>"]
+    B --> C["2️⃣ Set up JDK 21<br/><sub>temurin, Maven cache</sub>"]
+    C --> D["3️⃣ mvn clean package -DskipTests<br/><sub>→ moneymanager-0.0.1-SNAPSHOT.jar</sub>"]
+    D --> E["4️⃣ docker build<br/><sub>montrax-money-manager:latest</sub>"]
+    E --> F["5️⃣ Login to DockerHub<br/><sub>docker/login-action@v4</sub>"]
+    F --> G["6️⃣ docker push :latest"]
+    G --> H["7️⃣ SSH into Oracle Cloud instance<br/><sub>appleboy/ssh-action@v1.2.0</sub>"]
+    H --> I["docker pull image:latest"]
+    I --> J["docker stop + rm old container"]
+    J --> K["docker run -d --restart unless-stopped<br/>--env-file .env  -p 8090:8090"]
+    K --> L["docker image prune -f"]
+    L --> M["✅ Live at :8090 behind Nginx"]
+
+    style A fill:#1f6feb,color:#fff
+    style M fill:#238636,color:#fff
+    style G fill:#2496ED,color:#fff
+    style H fill:#f0883e,color:#000
+```
+
+### Required GitHub Secrets
+
+| Secret | Used for |
+|---|---|
+| `DOCKER_USERNAME` / `DOCKER_PASSWORD` | DockerHub login + image namespace |
+| `OCI_HOST` | Oracle Cloud instance address for SSH |
+| `OCI_USER` | SSH login user |
+| `OCI_SSH_KEY` | Private key for SSH auth |
+| `OCI_CONTAINER_NAME` | Name of the running container to stop/replace |
+
+The `.env` file consumed by `--env-file` lives directly on the server (`/home/<OCI_USER>/apps/app2/.env`) and is **not** managed by this pipeline — it's created once during initial server setup and edited by hand whenever a secret rotates. The pipeline only ever changes the *image*, never the environment configuration. TLS certs are similarly mounted read-only from the host (`/home/<OCI_USER>/apps/app2/certs`).
+
+### Production topology
+
+```mermaid
+flowchart LR
+    U["🌐 Internet"] -->|"443 HTTPS"| N["Nginx<br/>reverse proxy + TLS termination<br/>(Let's Encrypt)"]
+    N -->|"8090"| D["🐳 Docker container<br/>montrax-money-manager:latest<br/>-Xmx384m, Serial GC"]
+    D --> Neon[("PostgreSQL — Neon")]
+    D --> Ext["Redis / MongoDB / Kafka / RabbitMQ<br/>managed cloud brokers"]
+
+    style N fill:#009639,color:#fff
+    style D fill:#2496ED,color:#fff
+```
+
+Kafka/RabbitMQ are **never started by this pipeline** — production points at managed brokers via env vars, not the local `docker compose --profile infra` containers used in development.
+
+### Known gaps — read before trusting a green run
+
+| Gap | Consequence |
+|---|---|
+| **No rollback tag** — every build overwrites `:latest` | A bad build has no `:previous` to fall back to on DockerHub |
+| **No health-gated cutover** — old container is stopped *before* the new one is confirmed healthy | A crash-on-boot image causes real downtime with nothing auto-reverting |
+| **Tests are skipped** (`-DskipTests=true`) | The suite never gates what ships |
+| **No post-deploy smoke test** | Nothing curls `/actuator/health` after `docker run` — a broken deploy can still show green in Actions |
+| **Plain `docker run`, not `docker compose up`** | The `deploy.resources.limits` in `docker-compose.yml` are dev/reference-only and are **not** applied in production |
+
+**Suggested hardening, in priority order:** (1) tag images by commit SHA alongside `:latest` for instant rollback, (2) health-check the new container before removing the old one (blue/green on a temp port), (3) drop `-DskipTests` so a broken build never reaches DockerHub, (4) add a post-deploy smoke-test step that fails the workflow if `/actuator/health` doesn't come up clean. Full first-time server provisioning steps (Nginx config, SSL, firewall) live in [`DEPLOYMENT.md`](DEPLOYMENT.md).
+
+---
+
 ## 📊 Load Handling & Capacity Limits
 
 This section works backward from the actual configured limits in `application.properties` and `docker-compose.yml` — these are **derived estimates from configuration, not measured load-test results**. Run a real load test (k6, JMeter, Gatling) against your target environment before treating these as guarantees.
 
-```
-┌─────────┐     ┌──────────┐     ┌─────────────┐     ┌──────────┐
-│ Client  │────▶│  Login   │───▶ │  Validate   │────▶│  Generate│
-│         │     │ Request  │     │ Credentials │     │   JWT    │
-└─────────┘     └──────────┘     └─────────────┘     └────┬─────┘
-                                                          │
-     ┌────────────────────────────────────────────────────┘
-     │
-     ▼
-┌──────────────┐     ┌─────────────────┐     ┌──────────────┐
-│ Return Token │────▶│ Client Stores   │───▶ │ Subsequent   │
-│ to Client    │     │ Token           │     │ Requests     │
-└──────────────┘     └─────────────────┘     └──────┬───────┘
-                                                    │
-                                                    ▼
-                                            ┌─────────────────┐
-                                            │ JwtRequestFilter│
-                                            │ Validates Token │
-                                            └─────────────────┘
-```
 ### The two hard ceilings on a single instance
 
 | Resource | Configured limit | What happens beyond it |
